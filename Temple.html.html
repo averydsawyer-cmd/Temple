@@ -1,0 +1,1771 @@
+import { useState, useEffect, useRef } from “react”;
+
+// ─── API ─────────────────────────────────────────────────────────────────────
+async function callAPI(system, userContent, extraHeaders = {}) {
+const isArray = Array.isArray(userContent);
+const res = await fetch(“https://api.anthropic.com/v1/messages”, {
+method: “POST”,
+headers: { “Content-Type”: “application/json”, …extraHeaders },
+body: JSON.stringify({
+model: “claude-sonnet-4-20250514”,
+max_tokens: 2000,
+system,
+messages: [{ role: “user”, content: isArray ? userContent : [{ type: “text”, text: userContent }] }],
+}),
+});
+if (!res.ok) { const t = await res.text(); throw new Error(“HTTP “ + res.status + “: “ + t); }
+const data = await res.json();
+if (data.error) throw new Error(data.error.message);
+return (data.content || []).map(b => b.type === “text” ? b.text : “”).join(””).trim();
+}
+
+function parseJSON(raw) {
+if (!raw) throw new Error(“Empty response”);
+let s = raw.trim().replace(/^`(?:json)?\s*/i, "").replace(/\s*`\s*$/, “”);
+try { return JSON.parse(s); } catch (*) {}
+const m = s.match(/{[\s\S]*}/);
+if (m) { try { return JSON.parse(m[0]); } catch (*) {} }
+throw new Error(“Could not parse JSON. Got: “ + s.slice(0, 120));
+}
+
+// ─── STORAGE ──────────────────────────────────────────────────────────────────
+const STORAGE_VERSION = 2;
+const KEY = “temple_v2”;
+
+function load() {
+try {
+const r = localStorage.getItem(KEY);
+if (r) return JSON.parse(r);
+// Migrate from v1
+const old = localStorage.getItem(“temple_v1”);
+if (old) {
+const parsed = JSON.parse(old);
+const migrated = { …DEFAULT, …parsed, _version: STORAGE_VERSION };
+persist(migrated);
+return migrated;
+}
+return null;
+} catch { return null; }
+}
+
+function persist(d) {
+try { localStorage.setItem(KEY, JSON.stringify({ …d, _version: STORAGE_VERSION })); } catch {}
+}
+
+// ─── DEFAULTS ─────────────────────────────────────────────────────────────────
+const DEFAULT = {
+_version: STORAGE_VERSION,
+programs: [], activeProgram: null, workoutHistory: [], bodyweight: [],
+streak: 0, lastWorkoutDate: null, sickProtectedUntil: null,
+profile: { name: “”, equipment: [], injuries: [], units: “kg”, onboardingDone: false },
+activeWorkout: null, // { exercises, restTimer: { active, seconds, remaining }, startTime, dayName }
+};
+
+// ─── EXERCISES ───────────────────────────────────────────────────────────────
+const EXERCISES = [
+{ id: “squat”,         name: “Back Squat”,        muscles: [“quads”,“glutes”,“hamstrings”], group: “legs”,      desc: “Bar on upper back, squat until thighs parallel, drive through heels.”,      alt: “Goblet Squat” },
+{ id: “deadlift”,      name: “Deadlift”,           muscles: [“hamstrings”,“glutes”,“back”],  group: “back”,      desc: “Hip hinge, flat back, bar close to shins, drive hips through at top.”,      alt: “Romanian Deadlift” },
+{ id: “bench”,         name: “Bench Press”,        muscles: [“chest”,“triceps”,“shoulders”], group: “chest”,     desc: “Retract shoulder blades, lower bar to chest, press explosively.”,             alt: “DB Bench Press” },
+{ id: “ohp”,           name: “Overhead Press”,     muscles: [“shoulders”,“triceps”],         group: “shoulders”, desc: “Press bar from shoulder height overhead, lock out at top.”,                   alt: “DB Shoulder Press” },
+{ id: “row”,           name: “Barbell Row”,        muscles: [“back”,“biceps”],               group: “back”,      desc: “Hinge forward, pull bar to lower chest, squeeze shoulder blades.”,            alt: “DB Row” },
+{ id: “pullup”,        name: “Pull-up”,            muscles: [“back”,“biceps”],               group: “back”,      desc: “Dead hang, pull chest to bar, controlled descent.”,                          alt: “Lat Pulldown” },
+{ id: “dip”,           name: “Dips”,               muscles: [“chest”,“triceps”],             group: “chest”,     desc: “Lean slightly forward, lower until 90 degrees.”,                             alt: “Push-up” },
+{ id: “lunge”,         name: “Lunge”,              muscles: [“quads”,“glutes”],              group: “legs”,      desc: “Step forward, lower back knee toward floor, torso upright.”,                 alt: “Step-up” },
+{ id: “rdl”,           name: “Romanian Deadlift”,  muscles: [“hamstrings”,“glutes”],         group: “legs”,      desc: “Soft knee bend, hinge hips back until stretch in hamstrings.”,               alt: “Leg Curl” },
+{ id: “curl”,          name: “Bicep Curl”,         muscles: [“biceps”],                      group: “arms”,      desc: “Keep elbows fixed, curl to chin, lower with control.”,                       alt: “Hammer Curl” },
+{ id: “tricep_ext”,    name: “Tricep Extension”,   muscles: [“triceps”],                     group: “arms”,      desc: “Keep elbows close, extend fully, slow on the way down.”,                     alt: “Push-down” },
+{ id: “calf_raise”,    name: “Calf Raise”,         muscles: [“calves”],                      group: “legs”,      desc: “Full range, pause at top and bottom.”,                                       alt: “Seated Calf Raise” },
+{ id: “plank”,         name: “Plank”,              muscles: [“core”],                        group: “core”,      desc: “Neutral spine, squeeze glutes and abs, breathe steadily.”,                   alt: “Dead Bug” },
+{ id: “crunch”,        name: “Crunch”,             muscles: [“core”],                        group: “core”,      desc: “Curl shoulders off floor, avoid pulling on neck.”,                           alt: “Dead Bug” },
+{ id: “pushup”,        name: “Push-up”,            muscles: [“chest”,“triceps”,“shoulders”], group: “chest”,     desc: “Hands shoulder-width, lower chest to floor, maintain plank body.”,            alt: “Knee Push-up” },
+{ id: “goblet_squat”,  name: “Goblet Squat”,       muscles: [“quads”,“glutes”],              group: “legs”,      desc: “Hold DB at chest, squat deep, elbows track inside knees.”,                   alt: “Bodyweight Squat” },
+{ id: “lat_pulldown”,  name: “Lat Pulldown”,       muscles: [“back”,“biceps”],               group: “back”,      desc: “Pull bar to upper chest, lean slightly back, control the return.”,            alt: “Band Pulldown” },
+{ id: “leg_press”,     name: “Leg Press”,          muscles: [“quads”,“glutes”],              group: “legs”,      desc: “Feet shoulder-width, press to full extension, control descent.”,              alt: “Squat” },
+{ id: “db_bench”,      name: “DB Bench Press”,     muscles: [“chest”,“triceps”],             group: “chest”,     desc: “Slight arch, lower DBs to chest level, press up and in.”,                    alt: “Push-up” },
+{ id: “db_row”,        name: “DB Row”,             muscles: [“back”,“biceps”],               group: “back”,      desc: “One knee on bench, pull DB to hip, squeeze at top.”,                         alt: “Barbell Row” },
+{ id: “hip_thrust”,    name: “Hip Thrust”,         muscles: [“glutes”,“hamstrings”],         group: “legs”,      desc: “Upper back on bench, drive hips to full extension, squeeze at top.”,          alt: “Glute Bridge” },
+{ id: “face_pull”,     name: “Face Pull”,          muscles: [“shoulders”,“back”],            group: “shoulders”, desc: “Pull rope to face, elbows high, external rotation at end.”,                   alt: “Band Pull-apart” },
+{ id: “lateral_raise”, name: “Lateral Raise”,      muscles: [“shoulders”],                   group: “shoulders”, desc: “Raise DBs to shoulder height, slight forward lean, controlled descent.”,       alt: “Cable Lateral Raise” },
+{ id: “run”,           name: “Running”,            muscles: [“quads”,“calves”,“glutes”],     group: “cardio”,    desc: “Maintain comfortable pace, land midfoot.”,                                    alt: “Walking” },
+{ id: “walk”,          name: “Walking”,            muscles: [“quads”,“calves”],              group: “cardio”,    desc: “Steady pace, arms relaxed.”,                                                 alt: “Running” },
+];
+
+const GROUPS = [“chest”,“back”,“shoulders”,“arms”,“legs”,“core”,“cardio”];
+const EX_MAP = EXERCISES.map(e => e.id + “=” + e.name).join(”, “);
+
+// ─── COLORS ───────────────────────────────────────────────────────────────────
+const C = {
+bg: “#1a1a1a”, surface: “#242424”, surfaceHigh: “#2e2e2e”, border: “#383838”,
+accent: “#e8b86d”,
+// Colorblind-safe: blue/orange/yellow instead of red/green
+blue: “#5b8dd9”,    // fresh muscle / success
+orange: “#e07c3a”,  // fatigued / danger
+yellow: “#e0c45c”,  // worked / warning
+// Keep for legacy / feel ratings
+red: “#e05c5c”, green: “#5cb87a”,
+text: “#f0ece4”, muted: “#8a8580”, dim: “#5a5652”,
+};
+
+// ─── SHARED STYLES ────────────────────────────────────────────────────────────
+function btn(v) {
+return {
+display: “block”, width: “100%”, padding: “14px 20px”, borderRadius: 10,
+border: v === “outline” ? “1px solid “ + C.border : “none”,
+background: v === “primary” ? C.accent : v === “danger” ? C.orange : v === “outline” ? “transparent” : C.surfaceHigh,
+color: v === “primary” ? “#1a1a1a” : C.text,
+fontSize: 15, fontWeight: 700, cursor: “pointer”, letterSpacing: 0.5,
+fontFamily: “‘Atkinson Hyperlegible’, ‘Georgia’, sans-serif”,
+};
+}
+
+function btnSm(v) {
+return {
+padding: “8px 14px”, borderRadius: 8,
+border: v === “outline” ? “1px solid “ + C.border : “none”,
+background: v === “primary” ? C.accent : v === “ghost” ? “transparent” : C.surfaceHigh,
+color: v === “primary” ? “#1a1a1a” : C.text,
+fontSize: 13, fontWeight: 600, cursor: “pointer”,
+fontFamily: “‘Atkinson Hyperlegible’, ‘Georgia’, sans-serif”,
+};
+}
+
+function tag(active) {
+return {
+padding: “5px 11px”, borderRadius: 20,
+border: “1px solid “ + (active ? C.accent : C.border),
+background: active ? C.accent + “20” : “transparent”,
+color: active ? C.accent : C.muted,
+fontSize: 12, cursor: “pointer”,
+fontFamily: “‘Atkinson Hyperlegible’, ‘Georgia’, sans-serif”,
+};
+}
+
+const baseFont = “‘Atkinson Hyperlegible’, ‘Arial’, sans-serif”;
+const card    = { background: C.surface, border: “1px solid “ + C.border, borderRadius: 12, padding: 16, marginBottom: 14 };
+const cardHL  = { background: C.surfaceHigh, border: “1px solid “ + C.accent + “40”, borderRadius: 12, padding: 16, marginBottom: 14 };
+const h2style = { fontSize: 17, fontWeight: 700, color: C.text, marginBottom: 12, letterSpacing: 0.5 };
+const h3style = { fontSize: 11, fontWeight: 600, color: C.muted, marginBottom: 8, textTransform: “uppercase”, letterSpacing: 1 };
+const input   = { width: “100%”, background: C.surfaceHigh, border: “1px solid “ + C.border, borderRadius: 8, padding: “10px 12px”, color: C.text, fontSize: 14, fontFamily: baseFont, boxSizing: “border-box” };
+const lbl     = { fontSize: 11, color: C.muted, marginBottom: 4, display: “block”, textTransform: “uppercase”, letterSpacing: 0.8 };
+const scr     = { padding: “20px 16px” };
+const errBox  = { color: C.orange, fontSize: 12, padding: “8px 10px”, background: C.orange + “15”, borderRadius: 6, lineHeight: 1.5, marginTop: 10 };
+
+function badge(color) {
+color = color || C.accent;
+return { background: color + “25”, color, border: “1px solid “ + color + “50”, borderRadius: 6, padding: “2px 8px”, fontSize: 11, fontWeight: 600 };
+}
+
+function BackBtn({ onClick }) {
+return (
+<button style={{ background: “none”, border: “none”, color: C.accent, cursor: “pointer”, marginBottom: 12, fontSize: 14, fontFamily: baseFont }} onClick={onClick}>
+Back
+</button>
+);
+}
+
+// ─── MUSCLE MAP ───────────────────────────────────────────────────────────────
+function MuscleMap({ worked }) {
+worked = worked || {};
+function col(g) {
+const v = worked[g];
+if (v === undefined) return C.blue + “55”;   // no data — dim blue, never been worked
+if (v === 0) return C.blue;                   // fresh — full blue
+if (v < 0.4) return C.yellow;                 // worked
+return C.orange;                              // fatigued
+}
+function stroke(g) {
+const v = worked[g];
+return v === undefined ? C.border : C.border;
+}
+return (
+<svg viewBox=“0 0 120 220” style={{ width: “100%”, maxWidth: 140, display: “block”, margin: “0 auto” }}>
+<ellipse cx="60" cy="18" rx="12" ry="14" fill={C.surfaceHigh} stroke={C.border} strokeWidth="1.5" />
+<rect x="54" y="30" width="12" height="10" rx="3" fill={C.surfaceHigh} />
+<path d=“M35 42 Q60 38 85 42 L88 72 Q60 76 32 72 Z” fill={col(“chest”)} stroke={stroke(“chest”)} strokeWidth=“1” />
+<ellipse cx=“28” cy=“48” rx=“10” ry=“12” fill={col(“shoulders”)} stroke={stroke(“shoulders”)} strokeWidth=“1” />
+<ellipse cx=“92” cy=“48” rx=“10” ry=“12” fill={col(“shoulders”)} stroke={stroke(“shoulders”)} strokeWidth=“1” />
+<rect x=“16” y=“58” width=“14” height=“36” rx=“6” fill={col(“arms”)} stroke={stroke(“arms”)} strokeWidth=“1” />
+<rect x=“90” y=“58” width=“14” height=“36” rx=“6” fill={col(“arms”)} stroke={stroke(“arms”)} strokeWidth=“1” />
+<rect x=“14” y=“96” width=“12” height=“28” rx=“5” fill={col(“arms”)} stroke={stroke(“arms”)} strokeWidth=“1” />
+<rect x=“94” y=“96” width=“12” height=“28” rx=“5” fill={col(“arms”)} stroke={stroke(“arms”)} strokeWidth=“1” />
+<rect x=“35” y=“72” width=“50” height=“38” rx=“4” fill={col(“core”)} stroke={stroke(“core”)} strokeWidth=“1” />
+<line x1="60" y1="74" x2="60" y2="108" stroke={C.border} strokeWidth="1" />
+<ellipse cx=“46” cy=“56” rx=“7” ry=“10” fill={col(“back”)} stroke={stroke(“back”)} strokeWidth=“1” opacity=“0.7” />
+<ellipse cx=“74” cy=“56” rx=“7” ry=“10” fill={col(“back”)} stroke={stroke(“back”)} strokeWidth=“1” opacity=“0.7” />
+<rect x=“36” y=“112” width=“22” height=“56” rx=“8” fill={col(“legs”)} stroke={stroke(“legs”)} strokeWidth=“1” />
+<rect x=“62” y=“112” width=“22” height=“56” rx=“8” fill={col(“legs”)} stroke={stroke(“legs”)} strokeWidth=“1” />
+<rect x=“37” y=“170” width=“18” height=“36” rx=“7” fill={col(“legs”)} stroke={stroke(“legs”)} strokeWidth=“1” />
+<rect x=“65” y=“170” width=“18” height=“36” rx=“7” fill={col(“legs”)} stroke={stroke(“legs”)} strokeWidth=“1” />
+</svg>
+);
+}
+
+// ─── MINI CHART ───────────────────────────────────────────────────────────────
+function MiniChart({ data, color, label }) {
+color = color || C.accent;
+if (!data || data.length === 0) return <p style={{ color: C.dim, fontSize: 13 }}>No data yet</p>;
+const max = Math.max(…data.map(d => d.value), 1);
+return (
+<div>
+{label && <div style={h3style}>{label}</div>}
+<div style={{ display: “flex”, alignItems: “flex-end”, gap: 3, height: 60 }}>
+{data.slice(-14).map((d, i) => (
+<div key={i} style={{ flex: 1, height: Math.max(4, (d.value / max) * 52), background: color, borderRadius: “3px 3px 0 0”, alignSelf: “flex-end” }} />
+))}
+</div>
+</div>
+);
+}
+
+// ─── REST TIMER (stateless — driven by appData) ───────────────────────────────
+function RestTimerBar({ restTimer, onSkip }) {
+if (!restTimer || !restTimer.active) return null;
+const pct = restTimer.remaining / restTimer.seconds;
+const color = pct > 0.5 ? C.blue : pct > 0.2 ? C.yellow : C.orange;
+const label = pct > 0.5 ? “Rest” : pct > 0.2 ? “Almost ready” : “Go soon”;
+return (
+<div style={cardHL}>
+<div style={{ textAlign: “center”, padding: “10px 0” }}>
+<div style={{ fontSize: 42, fontWeight: 700, color, fontFamily: baseFont }}>{restTimer.remaining}s</div>
+<div style={{ height: 6, background: C.border, borderRadius: 3, marginTop: 8 }}>
+<div style={{ height: “100%”, width: (pct * 100) + “%”, background: color, borderRadius: 3, transition: “width 1s linear” }} />
+</div>
+<div style={{ fontSize: 11, color: C.muted, marginTop: 4, textTransform: “uppercase”, letterSpacing: 1 }}>{label}</div>
+</div>
+<button style={{ …btnSm(“outline”), width: “100%”, marginTop: 4 }} onClick={onSkip}>Skip Rest</button>
+</div>
+);
+}
+
+// ─── EXERCISE PICKER ──────────────────────────────────────────────────────────
+function ExercisePicker({ onSelect, onClose }) {
+const [search, setSearch] = useState(””);
+const filtered = EXERCISES.filter(e => e.name.toLowerCase().includes(search.toLowerCase()));
+return (
+<div style={{ position: “fixed”, inset: 0, background: “rgba(0,0,0,0.7)”, zIndex: 200, display: “flex”, alignItems: “flex-end” }}>
+<div style={{ background: C.surface, width: “100%”, maxWidth: 480, margin: “0 auto”, borderRadius: “16px 16px 0 0”, padding: 20, maxHeight: “70vh”, overflowY: “auto” }}>
+<div style={h2style}>Select Exercise</div>
+<input style={{ …input, marginBottom: 12 }} placeholder=“Search…” value={search} onChange={e => setSearch(e.target.value)} autoFocus />
+{filtered.map(ex => (
+<div key={ex.id} style={{ padding: “10px 0”, borderBottom: “1px solid “ + C.border, cursor: “pointer” }} onClick={() => onSelect(ex)}>
+<div style={{ fontWeight: 600, fontSize: 14 }}>{ex.name}</div>
+<div style={{ fontSize: 11, color: C.muted }}>{ex.muscles.join(”, “)}</div>
+</div>
+))}
+<button style={{ …btn(“outline”), marginTop: 12 }} onClick={onClose}>Cancel</button>
+</div>
+</div>
+);
+}
+
+// ─── HOME SCREEN ──────────────────────────────────────────────────────────────
+function HomeScreen({ appData, setAppData, navigate }) {
+const prog = appData.programs.find(p => p.id === appData.activeProgram);
+const today = new Date().toDateString();
+const workedToday = appData.workoutHistory.some(w => new Date(w.date).toDateString() === today);
+
+// Today’s day name from active program
+const todayIdx = prog ? appData.workoutHistory.length % prog.days.length : 0;
+const todayDay = prog && prog.days ? prog.days[todayIdx] : null;
+const todayLabel = todayDay ? todayDay.dayName : null;
+
+// Muscle load from recent workouts
+const recentWorkouts = appData.workoutHistory.slice(-3);
+const muscleLoad = {};
+// Mark all groups as “fresh” (0) first — distinct from “no data” (undefined)
+GROUPS.forEach(g => { if (g !== “cardio”) muscleLoad[g] = 0; });
+recentWorkouts.forEach(function(w, wi) {
+const weight = 1 - wi * 0.3;
+(w.exercises || []).forEach(function(ex) {
+const lib = EXERCISES.find(e => e.id === (ex.id || “”));
+if (lib) lib.muscles.forEach(function(m) { muscleLoad[m] = Math.min(1, (muscleLoad[m] || 0) + weight * 0.4); });
+});
+});
+
+// Active workout banner
+const hasActiveWorkout = !!(appData.activeWorkout && appData.activeWorkout.exercises);
+
+return (
+<div style={scr}>
+<div style={{ marginBottom: 24 }}>
+<div style={{ fontSize: 13, color: C.muted, textTransform: “uppercase”, letterSpacing: 1 }}>
+{new Date().toLocaleDateString(“en-US”, { weekday: “long”, month: “long”, day: “numeric” })}
+</div>
+<div style={{ fontSize: 24, fontWeight: 700, marginTop: 4 }}>
+{appData.profile.name ? “Welcome back, “ + appData.profile.name + “.” : “Welcome to Temple.”}
+</div>
+</div>
+
+```
+  {/* Return to workout banner */}
+  {hasActiveWorkout && (
+    <div style={{ ...cardHL, cursor: "pointer", marginBottom: 14 }} onClick={() => navigate("workout")}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <div style={{ fontSize: 13, color: C.accent, fontWeight: 700, marginBottom: 2 }}>Workout in progress</div>
+          <div style={{ fontSize: 12, color: C.muted }}>{appData.activeWorkout.dayName || "Active session"}</div>
+        </div>
+        <div style={{ color: C.accent, fontSize: 20 }}>›</div>
+      </div>
+      {appData.activeWorkout.restTimer && appData.activeWorkout.restTimer.active && (
+        <div style={{ marginTop: 8, fontSize: 12, color: C.yellow }}>
+          Rest timer: {appData.activeWorkout.restTimer.remaining}s remaining
+        </div>
+      )}
+    </div>
+  )}
+
+  {/* Stats row */}
+  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 20 }}>
+    {[
+      { val: appData.streak, lbl: "Streak" },
+      { val: appData.workoutHistory.length, lbl: "Workouts" },
+      { val: todayLabel || (prog ? prog.days.length + "-Day Split" : "—"), lbl: todayLabel ? "Today" : "Program" },
+    ].map(function(item) {
+      return (
+        <div key={item.lbl} style={{ ...card, textAlign: "center", marginBottom: 0, padding: "12px 8px" }}>
+          <div style={{ fontSize: item.val && item.val.toString().length > 4 ? 12 : 22, fontWeight: 700, color: C.accent, fontFamily: baseFont, lineHeight: 1.2 }}>{item.val}</div>
+          <div style={{ fontSize: 10, color: C.muted, textTransform: "uppercase", letterSpacing: 0.8, marginTop: 2 }}>{item.lbl}</div>
+        </div>
+      );
+    })}
+  </div>
+
+  {prog ? (
+    <div style={cardHL}>
+      <div style={h3style}>Active Program</div>
+      <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>{prog.name}</div>
+      {workedToday && !hasActiveWorkout
+        ? <div style={{ color: C.blue, fontSize: 14, textAlign: "center", padding: "8px 0" }}>Workout complete for today</div>
+        : hasActiveWorkout
+          ? <button style={btn("primary")} onClick={() => navigate("workout")}>Return to Workout</button>
+          : <button style={btn("primary")} onClick={() => navigate("workout")}>Start Today's Workout</button>
+      }
+    </div>
+  ) : (
+    <div style={card}>
+      <div style={{ fontSize: 14, color: C.muted, marginBottom: 14, lineHeight: 1.6 }}>No program selected. Choose how to start:</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <button style={btn("primary")} onClick={() => navigate("aiBuilder")}>AI Program Builder</button>
+        <button style={btn("secondary")} onClick={() => navigate("importBuilder")}>Import a Program</button>
+        <button style={btn("secondary")} onClick={() => navigate("manualBuilder")}>Build Manually</button>
+        <button style={btn("outline")} onClick={() => navigate("workout")}>Quick Workout</button>
+      </div>
+    </div>
+  )}
+
+  {/* Recovery map */}
+  <div style={card}>
+    <div style={h2style}>Recovery Map</div>
+    <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+      <MuscleMap worked={muscleLoad} />
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>Based on last 3 workouts</div>
+        {[
+          { lbl: "Fresh", color: C.blue },
+          { lbl: "Worked", color: C.yellow },
+          { lbl: "Fatigued", color: C.orange },
+          { lbl: "No data", color: C.blue + "55", border: "1px dashed " + C.border },
+        ].map(function(item) {
+          return (
+            <div key={item.lbl} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+              <div style={{ width: 10, height: 10, borderRadius: 2, background: item.color, border: item.border || "none" }} />
+              <span style={{ fontSize: 12, color: C.muted }}>{item.lbl}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  </div>
+  <button style={btn("outline")} onClick={() => navigate("injury")}>Report Pain / Injury</button>
+</div>
+```
+
+);
+}
+
+// ─── AI BUILDER ───────────────────────────────────────────────────────────────
+function AIBuilderScreen({ appData, setAppData, navigate }) {
+const [form, setForm] = useState({ goal: “”, days: “3”, level: “beginner”, equipment: [] });
+const [loading, setLoading] = useState(false);
+const [result, setResult] = useState(null);
+const [error, setError] = useState(””);
+const SYSTEM = “You are an expert fitness coach. Return ONLY a raw JSON object, no markdown, no backticks, no explanation. Use EXACTLY this format: {"name":"Program Name","description":"Brief description","durationWeeks":8,"days":[{"dayName":"Day 1 - Push","exercises":[{"name":"Exercise Name","sets":4,"reps":"8-10","rest":90,"notes":""}]}]}. Every exercise MUST have a "name" field as a plain string. Do not use "id" fields.”;
+
+async function generate() {
+setLoading(true); setError(””);
+try {
+const prompt = “Create a “ + form.days + “-day/week program. Goal: “ + form.goal + “. Level: “ + form.level + “. Equipment: “ + (form.equipment.join(”, “) || “full gym”) + “. Return only JSON.”;
+const raw = await callAPI(SYSTEM, prompt);
+const parsed = parseJSON(raw);
+if (!parsed.days) throw new Error(“Missing days in response”);
+parsed.id = Date.now().toString();
+parsed.createdAt = new Date().toISOString();
+parsed.days = parsed.days.map(function(day) {
+return { …day, exercises: (day.exercises || []).map(function(ex) {
+return { name: ex.name || ex.id || “Exercise”, id: ex.id || null, sets: ex.sets || 3, reps: ex.reps || “8-12”, rest: ex.rest || 90, notes: ex.notes || “” };
+})};
+});
+setResult(parsed);
+} catch (e) { setError(e.message); }
+setLoading(false);
+}
+
+function saveProgram() {
+const u = { …appData, programs: […appData.programs, result], activeProgram: result.id };
+setAppData(u); persist(u); navigate(“home”);
+}
+
+if (result) return (
+<div style={scr}>
+<div style={h2style}>Program Generated</div>
+<div style={cardHL}>
+<div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>{result.name}</div>
+<div style={{ fontSize: 13, color: C.muted, marginBottom: 10 }}>{result.description}</div>
+<span style={badge()}>{result.days.length} days/week · {result.durationWeeks} weeks</span>
+</div>
+{result.days.map((day, i) => (
+<div key={i} style={card}>
+<div style={{ fontWeight: 700, color: C.accent, marginBottom: 8 }}>{day.dayName}</div>
+{(day.exercises || []).map((ex, j) => (
+<div key={j} style={{ fontSize: 13, color: C.muted, marginBottom: 3 }}>· {ex.name} — {ex.sets}×{ex.reps} ({ex.rest}s)</div>
+))}
+</div>
+))}
+<button style={btn(“primary”)} onClick={saveProgram}>Save and Activate</button>
+<div style={{ height: 8 }} />
+<button style={btn(“outline”)} onClick={() => setResult(null)}>Regenerate</button>
+</div>
+);
+
+return (
+<div style={scr}>
+<BackBtn onClick={() => navigate(“home”)} />
+<div style={h2style}>AI Program Builder</div>
+<div style={card}>
+<div style={lbl}>Goal</div>
+<div style={{ display: “flex”, flexWrap: “wrap”, gap: 7, marginBottom: 14 }}>
+{[“Build muscle”,“Lose fat”,“Improve strength”,“General fitness”,“Athletic performance”].map(g => (
+<button key={g} style={tag(form.goal === g)} onClick={() => setForm({ …form, goal: g })}>{g}</button>
+))}
+</div>
+<div style={lbl}>Days per week</div>
+<div style={{ display: “flex”, gap: 7, marginBottom: 14 }}>
+{[“2”,“3”,“4”,“5”,“6”].map(d => <button key={d} style={tag(form.days === d)} onClick={() => setForm({ …form, days: d })}>{d}</button>)}
+</div>
+<div style={lbl}>Level</div>
+<div style={{ display: “flex”, gap: 7, marginBottom: 14 }}>
+{[“beginner”,“intermediate”,“advanced”].map(l => (
+<button key={l} style={tag(form.level === l)} onClick={() => setForm({ …form, level: l })}>{l}</button>
+))}
+</div>
+<div style={lbl}>Equipment (optional)</div>
+<div style={{ display: “flex”, flexWrap: “wrap”, gap: 7, marginBottom: 14 }}>
+{[“Barbell”,“Dumbbells”,“Cables”,“Machines”,“Bodyweight only”,“Kettlebells”,“Pull-up bar”].map(e => (
+<button key={e} style={tag(form.equipment.includes(e))} onClick={() => setForm({ …form, equipment: form.equipment.includes(e) ? form.equipment.filter(x => x !== e) : […form.equipment, e] })}>{e}</button>
+))}
+</div>
+{error && <div style={errBox}>{error}</div>}
+<button style={btn(“primary”)} onClick={generate} disabled={!form.goal || loading}>
+{loading ? “Generating…” : “Generate Program”}
+</button>
+</div>
+</div>
+);
+}
+
+// ─── IMPORT BUILDER ───────────────────────────────────────────────────────────
+function ImportBuilderScreen({ appData, setAppData, navigate }) {
+const [mode, setMode] = useState(null);
+const [text, setText] = useState(””);
+const [result, setResult] = useState(null);
+const [error, setError] = useState(””);
+const [loading, setLoading] = useState(false);
+
+function parseJSONInput() {
+setError(””);
+let parsed = null;
+try { parsed = JSON.parse(text.trim()); } catch (*) {}
+if (!parsed) {
+try {
+const s = text.trim().replace(/^`(?:json)?\s*/i, "").replace(/\s*`\s*$/, “”).trim();
+parsed = JSON.parse(s);
+} catch (*) {}
+}
+if (!parsed) {
+const m = text.match(/{[\s\S]*}/);
+if (m) { try { parsed = JSON.parse(m[0]); } catch (_) {} }
+}
+if (!parsed) { setError(“Could not read as JSON. Make sure you copied the full block including the outer { } braces.”); return; }
+if (!parsed.days || !Array.isArray(parsed.days)) { setError(“JSON parsed but missing a ‘days’ array. Check the format.”); return; }
+parsed.id = Date.now().toString();
+parsed.createdAt = new Date().toISOString();
+parsed.days = parsed.days.map(function(day) {
+return { …day, exercises: (day.exercises || []).map(function(ex) {
+return { name: ex.name || ex.id || “Unknown”, id: ex.id || null, sets: ex.sets || 3, reps: ex.reps || “—”, rest: ex.rest || 90, notes: ex.notes || ex.detail || “” };
+})};
+});
+setResult(parsed);
+}
+
+function saveProgram() {
+const u = { …appData, programs: […appData.programs, result], activeProgram: result.id };
+setAppData(u); persist(u); navigate(“home”);
+}
+
+if (result) return (
+<div style={scr}>
+<div style={h2style}>Program Ready</div>
+<div style={cardHL}>
+<div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>{result.name}</div>
+<div style={{ fontSize: 13, color: C.muted, marginBottom: 10 }}>{result.description}</div>
+<span style={badge()}>{result.days.length} days · {result.durationWeeks || “—”} weeks</span>
+</div>
+{result.days.map((day, i) => (
+<div key={i} style={card}>
+<div style={{ fontWeight: 700, color: C.accent, marginBottom: 8 }}>{day.dayName}</div>
+{(day.exercises || []).map((ex, j) => (
+<div key={j} style={{ marginBottom: 6 }}>
+<div style={{ fontSize: 13, color: C.text }}>{ex.name}</div>
+<div style={{ fontSize: 11, color: C.muted }}>{ex.sets}×{ex.reps}{ex.rest && ex.rest !== 90 ? “ · “ + ex.rest + “s rest” : “”}</div>
+{ex.notes ? <div style={{ fontSize: 10, color: C.dim, marginTop: 2 }}>{ex.notes}</div> : null}
+</div>
+))}
+</div>
+))}
+<button style={btn(“primary”)} onClick={saveProgram}>Save and Activate</button>
+<div style={{ height: 8 }} />
+<button style={btn(“outline”)} onClick={() => { setResult(null); setError(””); setText(””); setMode(null); }}>Start Over</button>
+</div>
+);
+
+if (!mode) return (
+<div style={scr}>
+<BackBtn onClick={() => navigate(“home”)} />
+<div style={h2style}>Import a Program</div>
+<div style={cardHL}>
+<div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Paste JSON</div>
+<div style={{ fontSize: 12, color: C.muted, marginBottom: 12, lineHeight: 1.6 }}>
+Have a program in Temple’s JSON format? Paste it here. Most reliable method.
+</div>
+<button style={btn(“primary”)} onClick={() => setMode(“json”)}>Paste JSON</button>
+</div>
+<div style={card}>
+<div style={h3style}>How to get JSON</div>
+<div style={{ fontSize: 12, color: C.muted, lineHeight: 1.8 }}>
+1. Paste your program into a chat with Claude{”\n”}
+2. Ask: “Convert this to Temple app JSON format”{”\n”}
+3. Copy the result and paste it here
+</div>
+</div>
+<div style={card}>
+<div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Paste Plain Text</div>
+<div style={{ fontSize: 12, color: C.muted, marginBottom: 4, lineHeight: 1.6 }}>Paste raw notes — Temple will try to parse with AI.</div>
+<div style={{ fontSize: 11, color: C.yellow, marginBottom: 12, padding: “6px 8px”, background: C.yellow + “15”, borderRadius: 6 }}>
+Requires AI access. May not work in all environments.
+</div>
+<button style={btn(“secondary”)} onClick={() => setMode(“text”)}>Paste Plain Text</button>
+</div>
+</div>
+);
+
+if (mode === “json”) return (
+<div style={scr}>
+<BackBtn onClick={() => { setMode(null); setError(””); setText(””); }} />
+<div style={h2style}>Paste JSON</div>
+<textarea
+style={{ …input, minHeight: 260, resize: “vertical”, lineHeight: 1.5, fontSize: 11 }}
+placeholder={’{\n  “name”: “My Program”,\n  “days”: [\n    {\n      “dayName”: “Day 1”,\n      “exercises”: […]\n    }\n  ]\n}’}
+value={text}
+onChange={e => setText(e.target.value)}
+/>
+{error && <div style={errBox}>{error}</div>}
+<div style={{ height: 10 }} />
+<button style={btn(“primary”)} onClick={parseJSONInput} disabled={!text.trim()}>Import Program</button>
+</div>
+);
+
+return (
+<div style={scr}>
+<BackBtn onClick={() => { setMode(null); setError(””); setText(””); }} />
+<div style={h2style}>Paste Plain Text</div>
+<div style={{ fontSize: 11, color: C.yellow, marginBottom: 12, padding: “8px 10px”, background: C.yellow + “15”, borderRadius: 6, lineHeight: 1.6 }}>
+This uses AI to parse your program. If it fails, use the JSON method instead.
+</div>
+<textarea
+style={{ …input, minHeight: 220, resize: “vertical”, lineHeight: 1.6 }}
+placeholder={“Day 1 - Push\nBench Press 4x8\nOverhead Press 3x10”}
+value={text}
+onChange={e => setText(e.target.value)}
+/>
+{error && <div style={errBox}>{error}</div>}
+<div style={{ height: 10 }} />
+<button style={btn(“primary”)} onClick={async () => {
+setLoading(true); setError(””);
+try {
+const SYSTEM = “You are a fitness program parser. Return ONLY raw JSON: {"name":"…","description":"…","durationWeeks":8,"days":[{"dayName":"Day 1","exercises":[{"name":"Exercise Name","sets":3,"reps":"8-10","rest":90,"notes":""}]}]}. Store exercise names exactly as written.”;
+const raw = await callAPI(SYSTEM, “Parse this workout program into JSON:\n\n” + text);
+const parsed = parseJSON(raw);
+if (!parsed.days || !Array.isArray(parsed.days)) throw new Error(“Missing days array”);
+parsed.id = Date.now().toString();
+parsed.createdAt = new Date().toISOString();
+parsed.days = parsed.days.map(function(day) {
+return { …day, exercises: (day.exercises || []).map(function(ex) {
+return { name: ex.name || ex.id || “Unknown”, id: ex.id || null, sets: ex.sets || 3, reps: ex.reps || “—”, rest: ex.rest || 90, notes: ex.notes || “” };
+})};
+});
+setResult(parsed);
+} catch (e) { setError(e.message + “. Try the JSON import method instead.”); }
+setLoading(false);
+}} disabled={!text.trim() || loading}>
+{loading ? “Parsing…” : “Parse with AI”}
+</button>
+</div>
+);
+}
+
+// ─── MANUAL BUILDER ───────────────────────────────────────────────────────────
+function ManualBuilderScreen({ appData, setAppData, navigate }) {
+const [name, setName] = useState(””);
+const [days, setDays] = useState([{ dayName: “Day 1”, exercises: [] }]);
+const [showPicker, setShowPicker] = useState(null);
+const [expandedEx, setExpandedEx] = useState(null); // “di-ei”
+
+function addDay() { setDays([…days, { dayName: “Day “ + (days.length + 1), exercises: [] }]); }
+
+function addExercise(di, ex) {
+const u = […days];
+u[di].exercises.push({ name: ex.name, id: ex.id, sets: 3, reps: “8-12”, rest: 90, notes: “” });
+setDays(u); setShowPicker(null);
+// Auto-expand the newly added exercise
+setExpandedEx(di + “-” + (u[di].exercises.length - 1));
+}
+
+function removeExercise(di, ei) {
+const u = JSON.parse(JSON.stringify(days));
+u[di].exercises.splice(ei, 1);
+setDays(u);
+setExpandedEx(null);
+}
+
+function updateExField(di, ei, field, val) {
+const u = JSON.parse(JSON.stringify(days));
+u[di].exercises[ei][field] = val;
+setDays(u);
+}
+
+function save() {
+if (!name.trim()) return;
+const prog = { id: Date.now().toString(), name, description: “Manually created program”, durationWeeks: 8, days, createdAt: new Date().toISOString() };
+const u = { …appData, programs: […appData.programs, prog], activeProgram: prog.id };
+setAppData(u); persist(u); navigate(“home”);
+}
+
+const smallInput = { …input, padding: “7px 10px”, fontSize: 13 };
+
+return (
+<div style={scr}>
+<BackBtn onClick={() => navigate(“home”)} />
+<div style={h2style}>Build Manually</div>
+<div style={card}>
+<div style={lbl}>Program Name</div>
+<input style={input} value={name} onChange={e => setName(e.target.value)} placeholder=“My Program” />
+</div>
+{days.map((day, di) => (
+<div key={di} style={card}>
+<input style={{ …input, marginBottom: 12, fontWeight: 700 }} value={day.dayName}
+onChange={e => { const u = JSON.parse(JSON.stringify(days)); u[di].dayName = e.target.value; setDays(u); }} />
+{day.exercises.map((ex, ei) => {
+const key = di + “-” + ei;
+const expanded = expandedEx === key;
+return (
+<div key={ei} style={{ borderBottom: “1px solid “ + C.border, marginBottom: 4 }}>
+{/* Exercise header row */}
+<div style={{ display: “flex”, justifyContent: “space-between”, alignItems: “center”, padding: “8px 0”, cursor: “pointer” }}
+onClick={() => setExpandedEx(expanded ? null : key)}>
+<div>
+<div style={{ fontSize: 13, fontWeight: 600 }}>{ex.name}</div>
+<div style={{ fontSize: 11, color: C.muted }}>{ex.sets} sets · {ex.reps} reps · {ex.rest}s rest</div>
+</div>
+<div style={{ display: “flex”, gap: 6, alignItems: “center” }}>
+<span style={{ color: C.dim, fontSize: 14 }}>{expanded ? “▲” : “▼”}</span>
+<button style={{ …btnSm(“ghost”), color: C.orange, fontSize: 16, padding: “2px 8px” }}
+onClick={e => { e.stopPropagation(); removeExercise(di, ei); }}>×</button>
+</div>
+</div>
+{/* Expanded edit fields */}
+{expanded && (
+<div style={{ paddingBottom: 12 }}>
+<div style={{ display: “grid”, gridTemplateColumns: “1fr 1fr 1fr”, gap: 8, marginBottom: 10 }}>
+<div>
+<div style={lbl}>Sets</div>
+<input style={smallInput} inputMode=“numeric” value={ex.sets}
+onChange={e => updateExField(di, ei, “sets”, parseInt(e.target.value) || 1)} />
+</div>
+<div>
+<div style={lbl}>Reps</div>
+<input style={smallInput} placeholder=“8-12” value={ex.reps}
+onChange={e => updateExField(di, ei, “reps”, e.target.value)} />
+</div>
+<div>
+<div style={lbl}>Rest (s)</div>
+<input style={smallInput} inputMode=“numeric” value={ex.rest}
+onChange={e => updateExField(di, ei, “rest”, parseInt(e.target.value) || 60)} />
+</div>
+</div>
+<div>
+<div style={lbl}>Notes (optional)</div>
+<input style={smallInput} placeholder=“e.g. pause at bottom” value={ex.notes}
+onChange={e => updateExField(di, ei, “notes”, e.target.value)} />
+</div>
+</div>
+)}
+</div>
+);
+})}
+<button style={{ background: “none”, border: “none”, color: C.accent, cursor: “pointer”, fontSize: 13, marginTop: 10, fontFamily: baseFont }}
+onClick={() => setShowPicker(di)}>+ Add Exercise</button>
+{showPicker === di && <ExercisePicker onSelect={ex => addExercise(di, ex)} onClose={() => setShowPicker(null)} />}
+</div>
+))}
+<button style={btn(“secondary”)} onClick={addDay}>+ Add Day</button>
+<div style={{ height: 10 }} />
+<button style={btn(“primary”)} onClick={save} disabled={!name.trim()}>Save and Activate</button>
+</div>
+);
+}
+
+// ─── WORKOUT SCREEN ───────────────────────────────────────────────────────────
+function WorkoutScreen({ appData, setAppData, navigate }) {
+const prog = appData.programs.find(p => p.id === appData.activeProgram);
+const todayIdx = appData.workoutHistory.length % (prog && prog.days ? prog.days.length : 1);
+const todayPlan = prog && prog.days ? prog.days[todayIdx] : null;
+const units = appData.profile.units || “kg”;
+
+function startWorkout(plan) {
+const init = (plan && plan.exercises ? plan.exercises : []).map(ex => ({
+…ex,
+sets: Array.from({ length: typeof ex.sets === “number” ? ex.sets : 3 }, () => ({ reps: “”, weight: “”, done: false })),
+}));
+const u = {
+…appData,
+activeWorkout: {
+exercises: init,
+dayName: plan ? plan.dayName : “Quick Workout”,
+startTime: new Date().toISOString(),
+feel: null,
+restTimer: { active: false, seconds: 90, remaining: 90 },
+},
+};
+setAppData(u); persist(u);
+}
+
+// Audio helper — call outside setAppData to avoid closure issues
+const playTone = (freq, duration, delay = 0, volume = 0.4) => {
+try {
+const ctx = new (window.AudioContext || window.webkitAudioContext)();
+const osc = ctx.createOscillator();
+const gain = ctx.createGain();
+osc.connect(gain); gain.connect(ctx.destination);
+osc.frequency.value = freq;
+gain.gain.setValueAtTime(volume, ctx.currentTime + delay);
+gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + duration);
+osc.start(ctx.currentTime + delay);
+osc.stop(ctx.currentTime + delay + duration + 0.05);
+} catch(_) {}
+};
+
+// Rest timer tick — uses absolute endTime so it keeps running across tab switches
+useEffect(() => {
+const t = setInterval(() => {
+setAppData(prev => {
+if (!prev.activeWorkout || !prev.activeWorkout.restTimer || !prev.activeWorkout.restTimer.active) return prev;
+const endTime = prev.activeWorkout.restTimer.endTime;
+const remaining = endTime ? Math.max(0, Math.round((endTime - Date.now()) / 1000)) : 0;
+
+```
+    if (remaining <= 0) {
+      // Finish: three ascending beeps, last one longer
+      playTone(660, 0.12, 0.00);
+      playTone(770, 0.12, 0.18);
+      playTone(880, 0.35, 0.36, 0.6);
+      const u = { ...prev, activeWorkout: { ...prev.activeWorkout, restTimer: { ...prev.activeWorkout.restTimer, active: false, remaining: 0 } } };
+      persist(u); return u;
+    }
+
+    // 15 second warning — two quick mid tones
+    if (remaining === 15) {
+      playTone(660, 0.1, 0.00, 0.35);
+      playTone(660, 0.1, 0.18, 0.35);
+    }
+
+    // 3-2-1 countdown ticks
+    if (remaining === 3) playTone(550, 0.08, 0, 0.25);
+    if (remaining === 2) playTone(550, 0.08, 0, 0.25);
+    if (remaining === 1) playTone(550, 0.08, 0, 0.25);
+
+    const u = { ...prev, activeWorkout: { ...prev.activeWorkout, restTimer: { ...prev.activeWorkout.restTimer, remaining } } };
+    persist(u); return u;
+  });
+}, 1000);
+return () => clearInterval(t);
+```
+
+}, []);
+
+const [showPicker, setShowPicker] = useState(false);
+const [swapIdx, setSwapIdx] = useState(null);
+const [done, setDone] = useState(false);
+
+const aw = appData.activeWorkout;
+
+// No active workout — show ready screen, don’t auto-start
+if (!aw || aw.completed || !aw.exercises) return (
+<div style={{ …scr, paddingTop: 32 }}>
+<div style={{ …h2style, marginBottom: 4 }}>
+{todayPlan ? todayPlan.dayName : “Workout”}
+</div>
+{todayPlan && (
+<div style={{ fontSize: 13, color: C.muted, marginBottom: 24 }}>
+{todayPlan.exercises ? todayPlan.exercises.length + “ exercises planned” : “”}
+</div>
+)}
+{todayPlan && (
+<div style={card}>
+{todayPlan.exercises && todayPlan.exercises.map((ex, i) => (
+<div key={i} style={{ padding: “7px 0”, borderBottom: i < todayPlan.exercises.length - 1 ? “1px solid “ + C.border : “none” }}>
+<div style={{ fontSize: 14, fontWeight: 600 }}>{ex.name}</div>
+<div style={{ fontSize: 11, color: C.muted }}>{ex.sets} sets · {ex.reps} reps</div>
+</div>
+))}
+</div>
+)}
+<button style={btn(“primary”)} onClick={() => startWorkout(todayPlan)}>
+{todayPlan ? “Start “ + todayPlan.dayName : “Start Quick Workout”}
+</button>
+<div style={{ height: 10 }} />
+<button style={btn(“outline”)} onClick={() => startWorkout(null)}>Quick Workout (no plan)</button>
+</div>
+);
+
+const exercises = aw.exercises || [];
+
+function updateExercises(newExercises) {
+const u = { …appData, activeWorkout: { …aw, exercises: newExercises } };
+setAppData(u); persist(u);
+}
+
+function updateSet(ei, si, field, val) {
+const u = exercises.map((ex, i) => i !== ei ? ex : { …ex, sets: ex.sets.map((s, j) => j !== si ? s : { …s, [field]: val }) });
+updateExercises(u);
+}
+
+function markDone(ei, si) {
+const u = exercises.map((ex, i) => i !== ei ? ex : { …ex, sets: ex.sets.map((s, j) => j !== si ? s : { …s, done: !s.done }) });
+const justDone = !exercises[ei].sets[si].done;
+const newAw = { …aw, exercises: u };
+if (justDone) {
+const restSecs = exercises[ei].rest || 90;
+newAw.restTimer = { active: true, seconds: restSecs, remaining: restSecs, endTime: Date.now() + restSecs * 1000, forExIdx: ei };
+// Beep sound
+try {
+const ctx = new (window.AudioContext || window.webkitAudioContext)();
+const osc = ctx.createOscillator(); const gain = ctx.createGain();
+osc.connect(gain); gain.connect(ctx.destination);
+osc.frequency.value = 880; gain.gain.setValueAtTime(0.3, ctx.currentTime);
+gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+osc.start(); osc.stop(ctx.currentTime + 0.15);
+} catch(_) {}
+} else {
+// Unticking — clear timer if it was for this exercise
+if (aw.restTimer && aw.restTimer.forExIdx === ei) {
+newAw.restTimer = { active: false, seconds: 90, remaining: 90, forExIdx: null };
+}
+}
+const upd = { …appData, activeWorkout: newAw };
+setAppData(upd); persist(upd);
+}
+
+function skipRest() {
+const u = { …appData, activeWorkout: { …aw, restTimer: { …aw.restTimer, active: false } } };
+setAppData(u); persist(u);
+}
+
+function addExercise(ex) {
+updateExercises([…exercises, { …ex, sets: Array.from({ length: 3 }, () => ({ reps: “”, weight: “”, done: false })) }]);
+setShowPicker(false);
+}
+
+function swapExercise(ex) {
+const u = exercises.map((e, i) => i !== swapIdx ? e : { …ex, sets: e.sets });
+updateExercises(u); setSwapIdx(null);
+}
+
+function setFeel(feel) {
+const u = { …appData, activeWorkout: { …aw, feel } };
+setAppData(u); persist(u);
+}
+
+function finish() {
+const workout = {
+id: Date.now().toString(),
+date: new Date().toISOString(),
+exercises: exercises.map(ex => ({ id: ex.id, name: ex.name, sets: ex.sets })),
+feel: aw.feel,
+dayName: aw.dayName,
+};
+const today = new Date().toDateString();
+const last = appData.lastWorkoutDate ? new Date(appData.lastWorkoutDate).toDateString() : null;
+const yesterday = new Date(Date.now() - 86400000).toDateString();
+const newStreak = last === today ? appData.streak : last === yesterday ? appData.streak + 1 : 1;
+// Use sentinel { completed: true } so useEffect doesn’t re-init a new workout
+const u = { …appData, workoutHistory: […appData.workoutHistory, workout], lastWorkoutDate: new Date().toISOString(), streak: newStreak, activeWorkout: { completed: true } };
+setAppData(u); persist(u); setDone(true);
+}
+
+if (done) return (
+<div style={{ …scr, textAlign: “center”, paddingTop: 60 }}>
+<div style={{ fontSize: 48, marginBottom: 12 }}>🏁</div>
+<div style={{ fontSize: 24, fontWeight: 700, marginBottom: 8 }}>Workout Complete</div>
+<div style={{ fontSize: 15, color: C.muted, marginBottom: 6 }}>Progress saved.</div>
+<div style={{ fontSize: 13, color: C.accent, marginBottom: 32 }}>
+{appData.streak > 1 ? appData.streak + “ day streak — keep it going.” : “First one down. Build the habit.”}
+</div>
+<button style={btn(“primary”)} onClick={() => {
+// Clear sentinel so next workout can be initialised fresh
+const u = { …appData, activeWorkout: null };
+setAppData(u); persist(u); navigate(“home”);
+}}>Back to Home</button>
+</div>
+);
+
+return (
+<div style={scr}>
+<div style={{ display: “flex”, justifyContent: “space-between”, alignItems: “center”, marginBottom: 16 }}>
+<div style={{ …h2style, marginBottom: 0 }}>{aw.dayName || “Quick Workout”}</div>
+<button style={btnSm(“ghost”)} onClick={() => navigate(“home”)}>×</button>
+</div>
+
+```
+  {exercises.map((ex, ei) => {
+    const lib = EXERCISES.find(e => e.id === ex.id);
+    const exName = ex.name || (lib ? lib.name : "Exercise");
+    const isTimerEx = aw.restTimer && aw.restTimer.active && aw.restTimer.forExIdx === ei;
+    const timerPct = isTimerEx ? aw.restTimer.remaining / aw.restTimer.seconds : 0;
+    const timerColor = timerPct > 0.5 ? C.blue : timerPct > 0.2 ? C.yellow : C.orange;
+    const cardBorder = isTimerEx ? timerColor + "80" : C.border;
+    return (
+      <div key={ei} style={{ ...card, border: "1px solid " + cardBorder, transition: "border-color 1s" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>{exName}</div>
+            <div style={{ fontSize: 11, color: C.muted }}>{lib && lib.muscles ? lib.muscles.join(", ") : ex.notes ? ex.notes.slice(0, 60) : ""}</div>
+          </div>
+          <button style={btnSm("ghost")} onClick={() => setSwapIdx(ei)}>Swap</button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "28px 1fr 1fr 40px", gap: 6, marginBottom: 6 }}>
+          {["Set","Weight","Reps",""].map((h, i) => <div key={i} style={{ fontSize: 10, color: C.dim }}>{h}</div>)}
+        </div>
+        {ex.sets.map((set, si) => (
+          <div key={si} style={{ display: "grid", gridTemplateColumns: "28px 1fr 1fr 40px", gap: 6, marginBottom: 6, opacity: set.done ? 0.5 : 1 }}>
+            <div style={{ fontSize: 13, color: C.muted, paddingTop: 8 }}>{si + 1}</div>
+            <input style={input} inputMode="decimal" placeholder={set.weight === "BW" ? "BW" : units} value={set.weight} onChange={e => updateSet(ei, si, "weight", e.target.value)} />
+            <input style={input} inputMode="decimal" placeholder={ex.reps || "reps"} value={set.reps} onChange={e => updateSet(ei, si, "reps", e.target.value)} />
+            <button style={{ background: set.done ? C.blue : C.surfaceHigh, border: "none", borderRadius: 8, cursor: "pointer", fontSize: 16, color: set.done ? "#fff" : C.muted }} onClick={() => markDone(ei, si)}>
+              {set.done ? "✓" : "○"}
+            </button>
+          </div>
+        ))}
+        {/* Inline rest timer — appears inside the exercise that triggered it */}
+        {isTimerEx && (
+          <div style={{ marginTop: 10, borderTop: "1px solid " + C.border, paddingTop: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={{ fontSize: 12, color: timerColor, fontWeight: 700 }}>
+                Resting — {aw.restTimer.remaining}s
+              </div>
+              <button style={{ ...btnSm("ghost"), fontSize: 11, color: C.muted, padding: "4px 8px" }} onClick={skipRest}>Skip</button>
+            </div>
+            <div style={{ height: 4, background: C.border, borderRadius: 2 }}>
+              <div style={{ height: "100%", width: (timerPct * 100) + "%", background: timerColor, borderRadius: 2, transition: "width 1s linear" }} />
+            </div>
+          </div>
+        )}
+        <button style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontSize: 12, fontFamily: baseFont, marginTop: isTimerEx ? 10 : 0 }} onClick={() => {
+          const u = exercises.map((e, i) => i !== ei ? e : { ...e, sets: [...e.sets, { reps: "", weight: "", done: false }] });
+          updateExercises(u);
+        }}>+ Set</button>
+      </div>
+    );
+  })}
+
+  <button style={btn("secondary")} onClick={() => setShowPicker(true)}>+ Add Exercise</button>
+  <div style={{ height: 10 }} />
+  <div style={card}>
+    <div style={h3style}>How did it feel?</div>
+    <div style={{ display: "flex", gap: 8 }}>
+      {["—","OK","Good","Great","Best"].map((lbl, i) => (
+        <button key={i} style={{ flex: 1, padding: "8px 0", background: aw.feel === i ? C.accent + "30" : C.bg, border: "1px solid " + (aw.feel === i ? C.accent : C.border), borderRadius: 8, fontSize: 11, color: aw.feel === i ? C.accent : C.muted, cursor: "pointer", fontFamily: baseFont }} onClick={() => setFeel(i)}>{lbl}</button>
+      ))}
+    </div>
+  </div>
+  <button style={btn("primary")} onClick={finish}>Finish Workout</button>
+
+  {showPicker && <ExercisePicker onSelect={addExercise} onClose={() => setShowPicker(false)} />}
+  {swapIdx !== null && <ExercisePicker onSelect={swapExercise} onClose={() => setSwapIdx(null)} />}
+</div>
+```
+
+);
+}
+
+// ─── PROGRESS SCREEN ──────────────────────────────────────────────────────────
+function ProgressScreen({ appData, setAppData }) {
+const [tab, setTab] = useState(“strength”);
+const [selectedEx, setSelectedEx] = useState(“bench”);
+const [bw, setBw] = useState(””);
+const [bwSaved, setBwSaved] = useState(false);
+const units = appData.profile.units || “kg”;
+
+const loggedExIds = […new Set(appData.workoutHistory.flatMap(w => (w.exercises || []).map(e => e.id).filter(Boolean)))];
+
+const strengthData = appData.workoutHistory
+.filter(w => w.exercises && w.exercises.some(e => e.id === selectedEx))
+.map(function(w) {
+const ex = w.exercises.find(e => e.id === selectedEx);
+const maxW = Math.max(…(ex.sets || []).map(s => parseFloat(s.weight) || 0));
+return { label: new Date(w.date).toLocaleDateString(“en-US”, { month: “short”, day: “numeric” }), value: maxW };
+}).filter(d => d.value > 0);
+
+const bwData = (appData.bodyweight || []).map(function(b) {
+return { label: new Date(b.date).toLocaleDateString(“en-US”, { month: “short”, day: “numeric” }), value: b.weight };
+});
+
+const weeklyVol = (function() {
+const weeks = {};
+appData.workoutHistory.forEach(function(w) {
+const d = new Date(w.date);
+const ws = new Date(d.setDate(d.getDate() - d.getDay())).toLocaleDateString();
+weeks[ws] = (weeks[ws] || 0) + 1;
+});
+return Object.entries(weeks).slice(-8).map(function(arr) { return { label: arr[0], value: arr[1] }; });
+})();
+
+function logBw() {
+if (!bw) return;
+const u = { …appData, bodyweight: […(appData.bodyweight || []), { date: new Date().toISOString(), weight: parseFloat(bw) }] };
+setAppData(u); persist(u); setBwSaved(true); setBw(””); setTimeout(() => setBwSaved(false), 2000);
+}
+
+return (
+<div style={scr}>
+<div style={h2style}>Progress</div>
+<div style={{ display: “flex”, gap: 8, marginBottom: 16 }}>
+{[“strength”,“bodyweight”,“volume”].map(t => <button key={t} style={tag(tab === t)} onClick={() => setTab(t)}>{t.charAt(0).toUpperCase() + t.slice(1)}</button>)}
+</div>
+{tab === “strength” && (
+<div style={card}>
+<div style={lbl}>Exercise</div>
+<select style={{ …input, marginBottom: 12 }} value={selectedEx} onChange={e => setSelectedEx(e.target.value)}>
+{(loggedExIds.length ? loggedExIds : EXERCISES.slice(0, 6).map(e => e.id)).map(id => {
+const lib = EXERCISES.find(e => e.id === id);
+return <option key={id} value={id}>{lib ? lib.name : id}</option>;
+})}
+</select>
+<MiniChart data={strengthData} color={C.accent} label={“Max Weight per Session (” + units + “)”} />
+{strengthData.length === 0 && <div style={{ color: C.dim, fontSize: 13, marginTop: 8 }}>Log workouts to see trends</div>}
+</div>
+)}
+{tab === “bodyweight” && (
+<div>
+<div style={card}><MiniChart data={bwData} color={C.blue} label={“Bodyweight Trend (” + units + “)”} /></div>
+<div style={card}>
+<div style={h3style}>Log Today’s Weight</div>
+<div style={{ display: “flex”, gap: 8 }}>
+<input style={{ …input, flex: 1 }} type=“number” placeholder={“e.g. 80 “ + units} value={bw} onChange={e => setBw(e.target.value)} />
+<button style={btnSm(“primary”)} onClick={logBw}>{bwSaved ? “Saved” : “Log”}</button>
+</div>
+</div>
+</div>
+)}
+{tab === “volume” && (
+<div>
+<div style={card}><MiniChart data={weeklyVol} color={C.accent} label="Workouts per Week" /></div>
+<div style={card}>
+<div style={h3style}>All-time</div>
+<div style={{ display: “grid”, gridTemplateColumns: “1fr 1fr”, gap: 10 }}>
+{[{ val: appData.workoutHistory.length, lbl: “Total Workouts” }, { val: appData.streak, lbl: “Current Streak” }, { val: loggedExIds.length, lbl: “Exercises Logged” }, { val: appData.programs.length, lbl: “Programs” }].map(function(item) {
+return (
+<div key={item.lbl} style={{ …card, marginBottom: 0, textAlign: “center” }}>
+<div style={{ fontSize: 26, fontWeight: 700, color: C.accent }}>{item.val}</div>
+<div style={{ fontSize: 11, color: C.muted }}>{item.lbl}</div>
+</div>
+);
+})}
+</div>
+</div>
+</div>
+)}
+<div style={card}>
+<div style={h2style}>Achievements</div>
+{[
+{ lbl: “First Workout”,  earned: appData.workoutHistory.length >= 1 },
+{ lbl: “10 Workouts”,    earned: appData.workoutHistory.length >= 10 },
+{ lbl: “7-Day Streak”,   earned: appData.streak >= 7 },
+{ lbl: “30-Day Streak”,  earned: appData.streak >= 30 },
+{ lbl: “First Program”,  earned: appData.programs.length >= 1 },
+].map((a, i) => (
+<div key={i} style={{ display: “flex”, alignItems: “center”, gap: 12, padding: “8px 0”, borderBottom: “1px solid “ + C.border, opacity: a.earned ? 1 : 0.3 }}>
+<div style={{ width: 8, height: 8, borderRadius: “50%”, background: a.earned ? C.accent : C.dim }} />
+<div>
+<div style={{ fontSize: 14, fontWeight: 600 }}>{a.lbl}</div>
+<div style={{ fontSize: 11, color: a.earned ? C.blue : C.dim }}>{a.earned ? “Earned” : “Locked”}</div>
+</div>
+</div>
+))}
+</div>
+</div>
+);
+}
+
+// ─── LIBRARY SCREEN ───────────────────────────────────────────────────────────
+function LibraryScreen() {
+const [search, setSearch] = useState(””);
+const [group, setGroup] = useState(“all”);
+const [selected, setSelected] = useState(null);
+
+const filtered = EXERCISES
+.filter(e => (group === “all” || e.group === group) && e.name.toLowerCase().includes(search.toLowerCase()))
+.sort((a, b) => a.name.localeCompare(b.name));
+
+// Group by muscle group for “all” view when not searching
+const showGrouped = group === “all” && !search.trim();
+const groupedExercises = showGrouped
+? GROUPS.reduce((acc, g) => {
+const exs = filtered.filter(e => e.group === g);
+if (exs.length) acc.push({ group: g, exercises: exs });
+return acc;
+}, [])
+: null;
+
+if (selected) return (
+<div style={scr}>
+<BackBtn onClick={() => setSelected(null)} />
+<div style={h2style}>{selected.name}</div>
+<div style={{ display: “flex”, flexWrap: “wrap”, gap: 6, marginBottom: 14 }}>
+{selected.muscles.map(m => <span key={m} style={badge()}>{m}</span>)}
+<span style={badge(C.blue)}>{selected.group}</span>
+</div>
+<div style={card}>
+<div style={h3style}>Form and Execution</div>
+<div style={{ fontSize: 14, color: C.muted, lineHeight: 1.7 }}>{selected.desc}</div>
+</div>
+{selected.alt && (
+<div style={card}>
+<div style={h3style}>Safe Alternative</div>
+<div style={{ fontSize: 14, color: C.accent }}>{selected.alt}</div>
+</div>
+)}
+</div>
+);
+
+function ExRow({ ex }) {
+return (
+<div style={{ …card, cursor: “pointer”, marginBottom: 8 }} onClick={() => setSelected(ex)}>
+<div style={{ display: “flex”, justifyContent: “space-between”, alignItems: “center” }}>
+<div>
+<div style={{ fontWeight: 600, fontSize: 14 }}>{ex.name}</div>
+<div style={{ fontSize: 11, color: C.muted }}>{ex.muscles.join(”, “)}</div>
+</div>
+<span style={{ color: C.dim, fontSize: 18 }}>›</span>
+</div>
+</div>
+);
+}
+
+return (
+<div style={scr}>
+<div style={h2style}>Exercise Library</div>
+<input
+style={{ …input, marginBottom: 12 }}
+placeholder=“Search exercises…”
+value={search}
+onChange={e => setSearch(e.target.value)}
+/>
+<div style={{ display: “flex”, gap: 7, flexWrap: “wrap”, marginBottom: 16 }}>
+<button style={tag(group === “all”)} onClick={() => setGroup(“all”)}>All</button>
+{GROUPS.map(g => (
+<button key={g} style={tag(group === g)} onClick={() => setGroup(g)}>
+{g.charAt(0).toUpperCase() + g.slice(1)}
+</button>
+))}
+</div>
+
+```
+  {showGrouped
+    ? groupedExercises.map(({ group: g, exercises: exs }) => (
+        <div key={g} style={{ marginBottom: 20 }}>
+          <div style={{ ...h3style, marginBottom: 8 }}>
+            {g.charAt(0).toUpperCase() + g.slice(1)} ({exs.length})
+          </div>
+          {exs.map(ex => <ExRow key={ex.id} ex={ex} />)}
+        </div>
+      ))
+    : filtered.map(ex => <ExRow key={ex.id} ex={ex} />)
+  }
+
+  {filtered.length === 0 && (
+    <div style={{ color: C.dim, fontSize: 13, textAlign: "center", paddingTop: 20 }}>
+      No exercises match your search.
+    </div>
+  )}
+</div>
+```
+
+);
+}
+
+// ─── INJURY SCREEN ────────────────────────────────────────────────────────────
+function InjuryScreen({ appData, setAppData, navigate }) {
+const [area, setArea] = useState(””);
+const [severity, setSeverity] = useState(null);
+const [result, setResult] = useState(null);
+const [loading, setLoading] = useState(false);
+const [error, setError] = useState(””);
+const AREAS = [“Shoulder”,“Elbow”,“Wrist”,“Lower back”,“Upper back”,“Hip”,“Knee”,“Ankle”,“Neck”,“Hamstring”,“Quad”,“Calf”];
+const SYSTEM = “You are a sports medicine expert. Return ONLY raw JSON: {"avoid":["Exercise Name"],"safe":["Exercise Name"],"tips":["Tip"]}”;
+
+async function analyze() {
+setLoading(true); setError(””);
+try {
+const prompt = “Pain in: “ + area + “, level “ + severity + “/5. Exercise list: “ + EXERCISES.map(e => e.name).join(”, “) + “. Which to avoid and safe alternatives?”;
+const raw = await callAPI(SYSTEM, prompt);
+const parsed = parseJSON(raw);
+const u = { …appData, profile: { …appData.profile, injuries: […(appData.profile.injuries || []), { area, severity, date: new Date().toISOString() }] } };
+setAppData(u); persist(u); setResult(parsed);
+} catch (e) { setError(e.message); }
+setLoading(false);
+}
+
+return (
+<div style={scr}>
+<BackBtn onClick={() => navigate(“home”)} />
+<div style={h2style}>Pain / Injury Report</div>
+<div style={card}>
+<div style={lbl}>Affected Area</div>
+<div style={{ display: “flex”, flexWrap: “wrap”, gap: 7, marginBottom: 14 }}>
+{AREAS.map(a => <button key={a} style={tag(area === a)} onClick={() => setArea(a)}>{a}</button>)}
+</div>
+<div style={lbl}>Pain Level (1–5)</div>
+<div style={{ display: “flex”, gap: 8, marginBottom: 14 }}>
+{[1,2,3,4,5].map(n => <button key={n} style={{ …tag(severity === n), flex: 1, textAlign: “center” }} onClick={() => setSeverity(n)}>{n}</button>)}
+</div>
+{error && <div style={errBox}>{error}</div>}
+<button style={btn(“primary”)} disabled={!area || !severity || loading} onClick={analyze}>
+{loading ? “Analyzing…” : “Get Alternatives”}
+</button>
+</div>
+{result && (
+<div>
+<div style={card}>
+<div style={{ …h3style, color: C.orange }}>Avoid</div>
+{(result.avoid || []).map((e, i) => <div key={i} style={{ fontSize: 13, color: C.orange, marginBottom: 3 }}>· {e}</div>)}
+</div>
+<div style={card}>
+<div style={{ …h3style, color: C.blue }}>Safe Alternatives</div>
+{(result.safe || []).map((e, i) => <div key={i} style={{ fontSize: 13, color: C.blue, marginBottom: 3 }}>· {e}</div>)}
+</div>
+<div style={card}>
+<div style={h3style}>Recovery Tips</div>
+{(result.tips || []).map((t, i) => <div key={i} style={{ fontSize: 13, color: C.muted, marginBottom: 6, lineHeight: 1.5 }}>· {t}</div>)}
+</div>
+<div style={{ fontSize: 11, color: C.dim, textAlign: “center”, marginBottom: 12 }}>Consult a healthcare professional for serious injuries.</div>
+</div>
+)}
+</div>
+);
+}
+
+// ─── TRAINING BALANCE ─────────────────────────────────────────────────────────
+function TrainingBalance({ appData, setAppData }) {
+const last14 = Array.from({ length: 14 }, function(_, i) {
+const d = new Date(); d.setDate(d.getDate() - (13 - i)); return d.toDateString();
+});
+const workedSet = new Set((appData.workoutHistory || []).map(w => new Date(w.date).toDateString()));
+const trainingDays = last14.filter(d => workedSet.has(d)).length;
+const ratio = trainingDays / 14;
+let statusColor, statusMsg, statusLbl;
+if (ratio > 0.85) { statusColor = C.orange; statusLbl = “High load”; statusMsg = “High training load — schedule more rest days to allow recovery.”; }
+else if (ratio > 0.65) { statusColor = C.blue; statusLbl = “Well balanced”; statusMsg = “Good balance of training and rest. Keep it up.”; }
+else if (ratio > 0.35) { statusColor = C.yellow; statusLbl = “Moderate”; statusMsg = “Moderate activity — room to add more training if your schedule allows.”; }
+else { statusColor = C.dim; statusLbl = “Low activity”; statusMsg = trainingDays === 0 ? “No workouts logged in the last 14 days.” : “Low activity — consider adding more training days.”; }
+const sickActive = appData.sickProtectedUntil && new Date(appData.sickProtectedUntil) > new Date();
+
+function protectStreak() {
+const u = { …appData, sickProtectedUntil: new Date(Date.now() + 48 * 3600 * 1000).toISOString() };
+setAppData(u); persist(u);
+}
+
+return (
+<div>
+<div style={{ display: “flex”, justifyContent: “space-between”, alignItems: “flex-start”, marginBottom: 14 }}>
+<div>
+<div style={{ fontSize: 36, fontWeight: 700, color: C.accent, fontFamily: baseFont, lineHeight: 1 }}>{appData.streak}</div>
+<div style={{ fontSize: 11, color: C.muted, textTransform: “uppercase”, letterSpacing: 1, marginTop: 2 }}>Day Streak</div>
+</div>
+<div style={{ textAlign: “right” }}>
+<div style={{ fontSize: 13, fontWeight: 600, color: statusColor }}>{statusLbl}</div>
+{sickActive && <div style={{ fontSize: 11, color: C.blue, marginTop: 2 }}>Streak protected</div>}
+</div>
+</div>
+<div style={{ marginBottom: 12 }}>
+<div style={{ fontSize: 11, color: C.muted, marginBottom: 6, textTransform: “uppercase”, letterSpacing: 0.8 }}>Last 14 days</div>
+<div style={{ display: “flex”, gap: 3 }}>
+{last14.map((d, i) => (
+<div key={i} style={{ flex: 1, aspectRatio: “1”, borderRadius: 3, background: workedSet.has(d) ? C.accent : C.bg, border: “1px solid “ + (d === new Date().toDateString() ? C.accent : C.border), opacity: workedSet.has(d) ? 1 : 0.5 }} />
+))}
+</div>
+<div style={{ display: “flex”, justifyContent: “space-between”, marginTop: 4 }}>
+<span style={{ fontSize: 10, color: C.dim }}>14 days ago</span>
+<span style={{ fontSize: 10, color: C.dim }}>Today</span>
+</div>
+</div>
+<div style={{ display: “flex”, gap: 8, marginBottom: 12 }}>
+{[{ val: trainingDays, lbl: “Training”, c: C.accent }, { val: 14 - trainingDays, lbl: “Rest”, c: C.muted }, { val: Math.round(ratio * 100) + “%”, lbl: “Load”, c: statusColor }].map(function(item) {
+return (
+<div key={item.lbl} style={{ flex: 1, background: C.bg, borderRadius: 8, padding: “8px 10px”, textAlign: “center” }}>
+<div style={{ fontSize: 20, fontWeight: 700, color: item.c }}>{item.val}</div>
+<div style={{ fontSize: 10, color: C.muted, textTransform: “uppercase”, letterSpacing: 0.6 }}>{item.lbl}</div>
+</div>
+);
+})}
+</div>
+<div style={{ fontSize: 12, color: C.muted, lineHeight: 1.5, marginBottom: 12, padding: “8px 10px”, background: C.bg, borderRadius: 8, borderLeft: “3px solid “ + statusColor }}>{statusMsg}</div>
+{sickActive
+? <div style={{ fontSize: 12, color: C.blue, textAlign: “center”, padding: “8px 0” }}>Streak protected for 48 hours</div>
+: <button style={btn(“outline”)} onClick={protectStreak}>I’m sick — protect my streak</button>
+}
+</div>
+);
+}
+
+// ─── SAVE / EXPORT / IMPORT ───────────────────────────────────────────────────
+function SaveDataPanel({ appData, setAppData }) {
+const [view, setView] = useState(“main”); // main | exportPreview | importing | importPreview
+const [filename, setFilename] = useState(“temple-backup-” + new Date().toISOString().slice(0, 10));
+const [importText, setImportText] = useState(””);
+const [importError, setImportError] = useState(””);
+const [importPreview, setImportPreview] = useState(null);
+const [msg, setMsg] = useState(””);
+const fileRef = useRef();
+
+// Build clean export payload — plain JS object, no circular refs, no blobs
+function buildPayload() {
+return {
+_version: STORAGE_VERSION,
+_exportedAt: new Date().toISOString(),
+profile: appData.profile || {},
+programs: appData.programs || [],
+activeProgram: appData.activeProgram || null,
+workoutHistory: appData.workoutHistory || [],
+bodyweight: appData.bodyweight || [],
+streak: appData.streak || 0,
+lastWorkoutDate: appData.lastWorkoutDate || null,
+sickProtectedUntil: appData.sickProtectedUntil || null,
+};
+}
+
+async function doExport() {
+const safeName = (filename.trim() || “temple-backup”) + “.json”;
+let payload;
+try {
+payload = JSON.stringify(buildPayload(), null, 2);
+} catch(e) {
+setMsg(“Export failed: could not serialize data.”); return;
+}
+const blob = new Blob([payload], { type: “application/json” });
+const file = new File([blob], safeName, { type: “application/json” });
+
+```
+// iOS/Android — native share sheet lets user pick Files, iCloud, AirDrop, email etc.
+if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+  try {
+    await navigator.share({ title: "Temple Backup", files: [file] });
+    setMsg("Shared successfully."); setView("main");
+  } catch(e) {
+    if (e.name !== "AbortError") setMsg("Share cancelled or failed.");
+  }
+} else {
+  // Desktop — trigger download
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = safeName; a.click();
+  URL.revokeObjectURL(url);
+  setMsg("Saved to downloads."); setView("main");
+}
+setTimeout(() => setMsg(""), 4000);
+```
+
+}
+
+function parseImport() {
+setImportError(””);
+try {
+const parsed = JSON.parse(importText.trim());
+if (!Array.isArray(parsed.programs) || !Array.isArray(parsed.workoutHistory)) {
+throw new Error(“This doesn’t look like a Temple backup — missing programs or workout history.”);
+}
+setImportPreview(parsed); setView(“importPreview”);
+} catch(e) { setImportError(e.message); }
+}
+
+function confirmImport() {
+const u = { …DEFAULT, …importPreview, _version: STORAGE_VERSION, activeWorkout: null };
+setAppData(u); persist(u);
+setView(“main”); setImportPreview(null); setImportText(””);
+setMsg(“Data restored successfully.”);
+setTimeout(() => setMsg(””), 3000);
+}
+
+function handleFile(e) {
+const file = e.target.files && e.target.files[0];
+if (!file) return;
+const reader = new FileReader();
+reader.onload = function(ev) {
+setImportText(ev.target.result);
+setView(“importing”);
+};
+reader.readAsText(file);
+e.target.value = “”;
+}
+
+// ── Export preview screen ──
+if (view === “exportPreview”) {
+const p = buildPayload();
+return (
+<div>
+<div style={{ …h3style, marginBottom: 12 }}>Review Before Saving</div>
+<div style={{ …card, marginBottom: 12 }}>
+<div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>What’s included</div>
+<div style={{ fontSize: 12, color: C.muted, marginBottom: 3 }}>
+{p.workoutHistory.length} workout{p.workoutHistory.length !== 1 ? “s” : “”} logged
+</div>
+<div style={{ fontSize: 12, color: C.muted, marginBottom: 3 }}>
+{p.programs.length} program{p.programs.length !== 1 ? “s” : “”} saved
+</div>
+<div style={{ fontSize: 12, color: C.muted, marginBottom: 3 }}>
+{p.bodyweight.length} bodyweight entr{p.bodyweight.length !== 1 ? “ies” : “y”}
+</div>
+<div style={{ fontSize: 12, color: C.muted }}>
+{p.streak} day streak · {p.profile.name || “no name set”}
+</div>
+</div>
+<div style={{ marginBottom: 12 }}>
+<div style={lbl}>File name</div>
+<div style={{ display: “flex”, alignItems: “center”, gap: 6 }}>
+<input
+style={{ …input, flex: 1 }}
+value={filename}
+onChange={e => setFilename(e.target.value)}
+placeholder=“temple-backup”
+/>
+<span style={{ fontSize: 12, color: C.dim, whiteSpace: “nowrap” }}>.json</span>
+</div>
+</div>
+<button style={btn(“primary”)} onClick={doExport}>Save File</button>
+<div style={{ height: 8 }} />
+<button style={btn(“outline”)} onClick={() => setView(“main”)}>Cancel</button>
+</div>
+);
+}
+
+// ── Import preview screen ──
+if (view === “importPreview” && importPreview) return (
+<div>
+<div style={{ fontSize: 13, color: C.muted, marginBottom: 10, lineHeight: 1.6 }}>
+This will replace all your current data. Here’s what’s in the backup:
+</div>
+<div style={{ …card, marginBottom: 12 }}>
+<div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>
+{importPreview.profile && importPreview.profile.name ? importPreview.profile.name + “’s data” : “Backup file”}
+</div>
+<div style={{ fontSize: 12, color: C.muted, marginBottom: 3 }}>
+{importPreview.workoutHistory ? importPreview.workoutHistory.length : 0} workouts
+</div>
+<div style={{ fontSize: 12, color: C.muted, marginBottom: 3 }}>
+{importPreview.programs ? importPreview.programs.length : 0} programs
+</div>
+{importPreview._exportedAt && (
+<div style={{ fontSize: 11, color: C.dim, marginTop: 6 }}>
+Exported {new Date(importPreview._exportedAt).toLocaleDateString(“en-US”, { year: “numeric”, month: “long”, day: “numeric” })}
+</div>
+)}
+</div>
+<button style={btn(“primary”)} onClick={confirmImport}>Restore This Backup</button>
+<div style={{ height: 8 }} />
+<button style={btn(“outline”)} onClick={() => { setView(“importing”); setImportPreview(null); }}>Go Back</button>
+</div>
+);
+
+// ── Import input screen ──
+if (view === “importing”) return (
+<div>
+<div style={{ fontSize: 12, color: C.muted, marginBottom: 10, lineHeight: 1.6 }}>
+Load a .json backup file or paste the contents below.
+</div>
+<button style={{ …btn(“secondary”), marginBottom: 10 }} onClick={() => fileRef.current && fileRef.current.click()}>
+Load File from Device
+</button>
+<input ref={fileRef} type=“file” accept=”.json” style={{ display: “none” }} onChange={handleFile} />
+<textarea
+style={{ …input, minHeight: 120, fontSize: 11, lineHeight: 1.5, marginBottom: 8 }}
+placeholder=“Or paste backup JSON here…”
+value={importText}
+onChange={e => setImportText(e.target.value)}
+/>
+{importError && <div style={errBox}>{importError}</div>}
+<button style={btn(“primary”)} onClick={parseImport} disabled={!importText.trim()}>Review Backup</button>
+<div style={{ height: 8 }} />
+<button style={btn(“outline”)} onClick={() => { setView(“main”); setImportText(””); setImportError(””); }}>Cancel</button>
+</div>
+);
+
+// ── Main screen ──
+return (
+<div>
+{msg && <div style={{ color: C.blue, fontSize: 12, marginBottom: 10, padding: “6px 8px”, background: C.blue + “15”, borderRadius: 6 }}>{msg}</div>}
+<div style={{ fontSize: 12, color: C.muted, marginBottom: 14, lineHeight: 1.6 }}>
+Export your data as a backup file. Import it on any device to restore your workouts, programs, and progress.
+</div>
+<button style={btn(“primary”)} onClick={() => { setFilename(“temple-backup-” + new Date().toISOString().slice(0, 10)); setView(“exportPreview”); }}>
+Export Backup
+</button>
+<div style={{ height: 8 }} />
+<button style={btn(“secondary”)} onClick={() => setView(“importing”)}>Import / Restore Backup</button>
+</div>
+);
+}
+
+// ─── PROFILE SCREEN ───────────────────────────────────────────────────────────
+function ProfileScreen({ appData, setAppData, navigate }) {
+const [name, setName] = useState(appData.profile.name || “”);
+const [saved, setSaved] = useState(false);
+const units = appData.profile.units || “kg”;
+
+function saveName() {
+const u = { …appData, profile: { …appData.profile, name } };
+setAppData(u); persist(u); setSaved(true); setTimeout(() => setSaved(false), 2000);
+}
+
+function setUnits(u) {
+const upd = { …appData, profile: { …appData.profile, units: u } };
+setAppData(upd); persist(upd);
+}
+
+return (
+<div style={scr}>
+<div style={h2style}>Profile and Settings</div>
+
+```
+  {/* Name */}
+  <div style={card}>
+    <div style={h3style}>Name</div>
+    <div style={{ display: "flex", gap: 8 }}>
+      <input style={{ ...input, flex: 1 }} value={name} onChange={e => setName(e.target.value)} placeholder="Your name" />
+      <button style={btnSm("primary")} onClick={saveName}>{saved ? "Saved" : "Save"}</button>
+    </div>
+  </div>
+
+  {/* Units */}
+  <div style={card}>
+    <div style={h3style}>Weight Units</div>
+    <div style={{ display: "flex", gap: 8 }}>
+      {["kg","lbs"].map(u => (
+        <button key={u} style={{ ...btnSm(units === u ? "primary" : "ghost"), flex: 1, border: "1px solid " + (units === u ? C.accent : C.border) }} onClick={() => setUnits(u)}>
+          {u}
+        </button>
+      ))}
+    </div>
+  </div>
+
+  {/* Training balance */}
+  <div style={card}>
+    <div style={h2style}>Training Balance</div>
+    <TrainingBalance appData={appData} setAppData={setAppData} />
+  </div>
+
+  {/* Programs — always show add button */}
+  <div style={card}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      <div style={h2style}>Programs</div>
+      <button style={btnSm("primary")} onClick={() => navigate("importBuilder")}>+ Add</button>
+    </div>
+    {appData.programs.length === 0
+      ? <div style={{ color: C.dim, fontSize: 13 }}>No programs yet</div>
+      : appData.programs.map(p => (
+        <div key={p.id} style={{ padding: "8px 0", borderBottom: "1px solid " + C.border }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</div>
+              <div style={{ fontSize: 11, color: C.muted }}>{p.days ? p.days.length : 0} days/week</div>
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {appData.activeProgram === p.id
+                ? <span style={badge(C.blue)}>Active</span>
+                : <button style={btnSm("primary")} onClick={() => { const u = { ...appData, activeProgram: p.id }; setAppData(u); persist(u); }}>Activate</button>
+              }
+              <button style={{ ...btnSm("ghost"), color: C.orange, fontSize: 16, padding: "4px 8px" }} onClick={() => {
+                const newPrograms = appData.programs.filter(x => x.id !== p.id);
+                const newActive = appData.activeProgram === p.id ? (newPrograms[0] ? newPrograms[0].id : null) : appData.activeProgram;
+                const u = { ...appData, programs: newPrograms, activeProgram: newActive };
+                setAppData(u); persist(u);
+              }}>×</button>
+            </div>
+          </div>
+        </div>
+      ))
+    }
+    <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+      <button style={{ ...btnSm("ghost"), color: C.accent, fontSize: 12 }} onClick={() => navigate("aiBuilder")}>AI Builder</button>
+      <button style={{ ...btnSm("ghost"), color: C.accent, fontSize: 12 }} onClick={() => navigate("manualBuilder")}>Manual Builder</button>
+    </div>
+  </div>
+
+  {/* Recent workouts */}
+  <div style={card}>
+    <div style={h2style}>Recent Workouts</div>
+    {appData.workoutHistory.length === 0
+      ? <div style={{ color: C.dim, fontSize: 13 }}>No workouts logged yet</div>
+      : appData.workoutHistory.slice(-10).reverse().map((w, i) => (
+        <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid " + C.border }}>
+          <div style={{ fontSize: 13 }}>{w.dayName || new Date(w.date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</div>
+          <div style={{ fontSize: 12, color: C.muted }}>{w.exercises ? w.exercises.length : 0} exercises</div>
+        </div>
+      ))
+    }
+  </div>
+
+  {/* Injury log */}
+  {(appData.profile.injuries || []).length > 0 && (
+    <div style={card}>
+      <div style={h2style}>Injury Log</div>
+      {appData.profile.injuries.slice(-5).map((inj, i) => (
+        <div key={i} style={{ fontSize: 13, color: C.muted, marginBottom: 4 }}>
+          {inj.area} — Level {inj.severity} · {new Date(inj.date).toLocaleDateString()}
+        </div>
+      ))}
+    </div>
+  )}
+
+  {/* Save / Export / Import */}
+  <div style={card}>
+    <div style={h2style}>Save and Backup</div>
+    <SaveDataPanel appData={appData} setAppData={setAppData} />
+  </div>
+
+  {/* Danger zone */}
+  <DangerZone appData={appData} setAppData={setAppData} />
+</div>
+```
+
+);
+}
+
+function DangerZone({ appData, setAppData }) {
+const [confirming, setConfirming] = useState(false);
+function doReset() {
+const fresh = { …DEFAULT };
+setAppData(fresh); persist(fresh); setConfirming(false);
+}
+return (
+<div style={{ …card, borderColor: C.orange + “40” }}>
+<div style={h3style}>Danger Zone</div>
+{confirming ? (
+<div>
+<div style={{ fontSize: 13, color: C.orange, marginBottom: 12, lineHeight: 1.6 }}>
+This will erase all workouts, programs, and progress. It cannot be undone.
+</div>
+<button style={btn(“danger”)} onClick={doReset}>Yes, Reset Everything</button>
+<div style={{ height: 8 }} />
+<button style={btn(“outline”)} onClick={() => setConfirming(false)}>Cancel</button>
+</div>
+) : (
+<button style={btn(“danger”)} onClick={() => setConfirming(true)}>Reset All Data</button>
+)}
+</div>
+);
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+export default function TempleApp() {
+const [appData, setAppData] = useState(() => ({ …DEFAULT, …(load() || {}) }));
+const [currentScreen, setCurrentScreen] = useState(“home”);
+
+// Load Atkinson Hyperlegible font
+useEffect(() => {
+const link = document.createElement(“link”);
+link.href = “https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap”;
+link.rel = “stylesheet”;
+document.head.appendChild(link);
+}, []);
+
+const navItems = [
+{ id: “home”,     icon: “⌂”, label: “Home” },
+{ id: “workout”,  icon: “↑”, label: “Workout” },
+{ id: “progress”, icon: “◈”, label: “Progress” },
+{ id: “library”,  icon: “≡”, label: “Library” },
+{ id: “profile”,  icon: “◉”, label: “Profile” },
+];
+
+const props = { appData, setAppData, navigate: setCurrentScreen };
+
+// Mini rest timer indicator in header when workout active and not on workout screen
+const showTimerIndicator = appData.activeWorkout && appData.activeWorkout.restTimer && appData.activeWorkout.restTimer.active && currentScreen !== “workout”;
+
+return (
+<div style={{ fontFamily: baseFont, background: C.bg, minHeight: “100vh”, color: C.text, maxWidth: 480, margin: “0 auto”, paddingBottom: 72 }}>
+{/* Header */}
+<div style={{ padding: “18px 20px 10px”, display: “flex”, alignItems: “center”, justifyContent: “space-between”, borderBottom: “1px solid “ + C.border, position: “sticky”, top: 0, background: C.bg, zIndex: 50 }}>
+<div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 3, color: C.accent, fontFamily: baseFont }}>TEMPLE</div>
+<div style={{ display: “flex”, alignItems: “center”, gap: 10 }}>
+{showTimerIndicator && (
+<div style={{ fontSize: 12, color: C.yellow, background: C.yellow + “20”, padding: “3px 8px”, borderRadius: 6, cursor: “pointer” }} onClick={() => setCurrentScreen(“workout”)}>
+Rest {appData.activeWorkout.restTimer.remaining}s
+</div>
+)}
+{appData.streak > 0 && <div style={{ fontSize: 13, color: C.accent }}>{appData.streak} day streak</div>}
+</div>
+</div>
+
+```
+  {/* Screens */}
+  <div>
+    {currentScreen === "home"          && <HomeScreen {...props} />}
+    {currentScreen === "workout"       && <WorkoutScreen {...props} />}
+    {currentScreen === "progress"      && <ProgressScreen {...props} />}
+    {currentScreen === "library"       && <LibraryScreen />}
+    {currentScreen === "profile"       && <ProfileScreen {...props} />}
+    {currentScreen === "aiBuilder"     && <AIBuilderScreen {...props} />}
+    {currentScreen === "importBuilder" && <ImportBuilderScreen {...props} />}
+    {currentScreen === "manualBuilder" && <ManualBuilderScreen {...props} />}
+    {currentScreen === "injury"        && <InjuryScreen {...props} />}
+  </div>
+
+  {/* Bottom nav */}
+  <nav style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, background: C.surface, borderTop: "1px solid " + C.border, display: "flex", zIndex: 100 }}>
+    {navItems.map(function(item) {
+      const active = currentScreen === item.id;
+      const hasWorkout = item.id === "workout" && appData.activeWorkout && appData.activeWorkout.exercises;
+      return (
+        <button key={item.id} style={{ flex: 1, padding: "10px 0 8px", background: "none", border: "none", color: active ? C.accent : C.dim, cursor: "pointer", fontSize: 10, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, fontFamily: baseFont, position: "relative" }} onClick={() => setCurrentScreen(item.id)}>
+          <span style={{ fontSize: 16, fontWeight: active ? 700 : 400 }}>{item.icon}</span>
+          <span>{item.label}</span>
+          {hasWorkout && <span style={{ position: "absolute", top: 6, right: "calc(50% - 14px)", width: 6, height: 6, borderRadius: "50%", background: C.yellow }} />}
+        </button>
+      );
+    })}
+  </nav>
+</div>
+```
+
+);
+}
