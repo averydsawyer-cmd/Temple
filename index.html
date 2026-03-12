@@ -12,9 +12,13 @@
     #root { max-width: 480px; margin: 0 auto; }
     input, textarea, select, button { font-family: inherit; }
     * { -webkit-tap-highlight-color: transparent; }
+    #loading { position: fixed; inset: 0; background: #1a1a1a; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 16px; z-index: 9999; }
+    #loading-title { font-size: 28px; font-weight: 700; color: #e8a020; letter-spacing: 2px; }
+    #loading-sub { font-size: 14px; color: #888; }
   </style>
 </head>
 <body>
+  <div id="loading"><div id="loading-title">TEMPLE</div><div id="loading-sub">Loading...</div></div>
   <div id="root"></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -6548,6 +6552,16 @@ function TempleApp() {
   );
 }
 
+
+const rootEl = document.getElementById("root");
+const loadingEl = document.getElementById("loading");
+const appRoot = ReactDOM.createRoot ? ReactDOM.createRoot(rootEl) : null;
+if (appRoot) {
+  appRoot.render(React.createElement(TempleApp));
+} else {
+  ReactDOM.render(React.createElement(TempleApp), rootEl);
+}
+if (loadingEl) loadingEl.style.display = "none";
 </script>
 </body>
 </html>
