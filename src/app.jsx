@@ -1,3 +1,4 @@
+const { useState, useEffect, useRef, useContext } = React;
 
 // ─── API ─────────────────────────────────────────────────────────────────────
 async function callAPI(system, userContent, extraHeaders = {}) {
