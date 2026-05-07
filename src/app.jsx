@@ -880,29 +880,58 @@ function HomeScreen({ appData, setAppData, navigate }) {
 
 // ─── AI BUILDER ───────────────────────────────────────────────────────────────
 function AIBuilderScreen({ appData, setAppData, navigate }) {
-  const [form, setForm] = useState({ goal: "", days: "3", level: "beginner", equipment: [] });
+  const baseFont = useAppFont();
+  const [form, setForm] = useState({ goal: "", days: "3", level: "beginner", equipment: [], description: "" });
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
-  const SYSTEM = "You are an expert fitness coach. Return ONLY a raw JSON object, no markdown, no backticks, no explanation. Use EXACTLY this format: {\"name\":\"Program Name\",\"description\":\"Brief description\",\"durationWeeks\":8,\"days\":[{\"dayName\":\"Day 1 - Push\",\"exercises\":[{\"name\":\"Exercise Name\",\"sets\":4,\"reps\":\"8-10\",\"rest\":90,\"notes\":\"\"}]}]}. Every exercise MUST have a \"name\" field as a plain string. Do not use \"id\" fields.";
+  const [refineText, setRefineText] = useState("");
+  const [refineLoading, setRefineLoading] = useState(false);
+
+  const SYSTEM = "You are an expert fitness coach. Return ONLY a raw JSON object, no markdown, no backticks, no explanation. Use EXACTLY this format: {\"name\":\"Program Name\",\"description\":\"Brief description\",\"durationWeeks\":8,\"days\":[{\"dayName\":\"Day 1 - Push\",\"exercises\":[{\"name\":\"Exercise Name\",\"sets\":4,\"reps\":\"8-10\",\"rest\":90,\"notes\":\"coaching cue here\"}]}]}. Every exercise MUST have a \"name\" field as a plain string. Do not use \"id\" fields.";
+
+  function normaliseProgram(parsed) {
+    parsed.id = parsed.id || Date.now().toString();
+    parsed.createdAt = parsed.createdAt || new Date().toISOString();
+    parsed.days = (parsed.days || []).map(function(day) {
+      return { ...day, exercises: (day.exercises || []).map(function(ex) {
+        return { name: ex.name || ex.id || "Exercise", sets: ex.sets || 3, reps: ex.reps || "8-12", rest: ex.rest || 90, notes: ex.notes || "" };
+      })};
+    });
+    return parsed;
+  }
 
   async function generate() {
     setLoading(true); setError("");
     try {
-      const prompt = "Create a " + form.days + "-day/week program. Goal: " + form.goal + ". Level: " + form.level + ". Equipment: " + (form.equipment.join(", ") || "full gym") + ". Return only JSON.";
+      const parts = [];
+      if (form.goal) parts.push("Goal: " + form.goal);
+      parts.push(form.days + " days/week");
+      parts.push("Level: " + form.level);
+      if (form.equipment.length) parts.push("Equipment: " + form.equipment.join(", "));
+      if (form.description.trim()) parts.push("Additional context: " + form.description.trim());
+      const prompt = "Create a training program. " + parts.join(". ") + ". Return only JSON.";
       const raw = await callAPI(SYSTEM, prompt);
       const parsed = parseJSON(raw);
       if (!parsed.days) throw new Error("Missing days in response");
-      parsed.id = Date.now().toString();
-      parsed.createdAt = new Date().toISOString();
-      parsed.days = parsed.days.map(function(day) {
-        return { ...day, exercises: (day.exercises || []).map(function(ex) {
-          return { name: ex.name || ex.id || "Exercise", id: ex.id || null, sets: ex.sets || 3, reps: ex.reps || "8-12", rest: ex.rest || 90, notes: ex.notes || "" };
-        })};
-      });
-      setResult(parsed);
+      setResult(normaliseProgram(parsed));
     } catch (e) { setError(e.message || JSON.stringify(e)); }
     setLoading(false);
+  }
+
+  async function refine() {
+    if (!refineText.trim()) return;
+    setRefineLoading(true); setError("");
+    try {
+      const prompt = "Here is the current program JSON:\n" + JSON.stringify(result, null, 2) + "\n\nUser request: " + refineText.trim() + "\n\nReturn the full updated program as JSON only.";
+      const raw = await callAPI(SYSTEM, prompt);
+      const parsed = parseJSON(raw);
+      if (!parsed.days) throw new Error("Missing days in response");
+      parsed.id = result.id;
+      setResult(normaliseProgram(parsed));
+      setRefineText("");
+    } catch (e) { setError(e.message || JSON.stringify(e)); }
+    setRefineLoading(false);
   }
 
   function saveProgram() {
@@ -912,23 +941,49 @@ function AIBuilderScreen({ appData, setAppData, navigate }) {
 
   if (result) return (
     <div style={scr}>
-      <div style={h2style}>Program Generated</div>
+      <BackBtn onClick={() => setResult(null)} />
+      <div style={h2style}>Program Ready</div>
       <div style={cardHL}>
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>{result.name}</div>
         <div style={{ fontSize: 15, color: C.muted, marginBottom: 10 }}>{result.description}</div>
-        <span style={badge()}>{result.days.length} days/week · {result.durationWeeks} weeks</span>
+        <span style={badge()}>{result.days.length} days/week · {result.durationWeeks || "—"} weeks</span>
       </div>
       {result.days.map((day, i) => (
         <div key={i} style={card}>
           <div style={{ fontWeight: 700, color: C.accent, marginBottom: 8 }}>{day.dayName}</div>
           {(day.exercises || []).map((ex, j) => (
-            <div key={j} style={{ fontSize: 15, color: C.muted, marginBottom: 3 }}>· {ex.name} — {Array.isArray(ex.sets) ? ex.sets.length : ex.sets}×{ex.reps} ({ex.rest}s)</div>
+            <div key={j} style={{ marginBottom: 6 }}>
+              <div style={{ fontSize: 15, color: C.text }}>{ex.name}</div>
+              <div style={{ fontSize: 13, color: C.muted }}>{Array.isArray(ex.sets) ? ex.sets.length : ex.sets} sets · {ex.reps} reps · {ex.rest}s rest</div>
+              {ex.notes ? <div style={{ fontSize: 13, color: C.dim, marginTop: 2, fontStyle: "italic" }}>{ex.notes}</div> : null}
+            </div>
           ))}
         </div>
       ))}
+
+      {/* Refinement chat */}
+      <div style={{ ...card, marginTop: 8 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 8 }}>Refine with AI</div>
+        <div style={{ fontSize: 13, color: C.dim, marginBottom: 10 }}>
+          Describe any changes — swap exercises, adjust volume, remove movements, change focus.
+        </div>
+        <textarea
+          value={refineText}
+          onChange={e => setRefineText(e.target.value)}
+          placeholder={"e.g. Remove all squats, I have a bad knee. Make day 2 more upper body focused. Add more core work."}
+          rows={3}
+          style={{ width: "100%", background: C.surfaceHigh, border: "1px solid " + C.border, borderRadius: 8, padding: "10px 12px", color: C.text, fontSize: 14, fontFamily: baseFont, resize: "none", marginBottom: 10 }}
+        />
+        {error && <div style={errBox}>{error}</div>}
+        <button style={btn("secondary")} onClick={refine} disabled={!refineText.trim() || refineLoading}>
+          {refineLoading ? "Updating..." : "Apply Changes"}
+        </button>
+      </div>
+
+      <div style={{ height: 12 }} />
       <button style={btn("primary")} onClick={saveProgram}>Save and Activate</button>
       <div style={{ height: 8 }} />
-      <button style={btn("outline")} onClick={() => setResult(null)}>Regenerate</button>
+      <button style={btn("outline")} onClick={() => { setResult(null); setError(""); }}>Start Over</button>
     </div>
   );
 
@@ -936,11 +991,29 @@ function AIBuilderScreen({ appData, setAppData, navigate }) {
     <div style={scr}>
       <BackBtn onClick={() => navigate("home")} />
       <div style={h2style}>AI Program Builder</div>
+
+      {/* Free-text description — shown first, most prominent */}
+      <div style={cardHL}>
+        <div style={{ fontSize: 15, fontWeight: 600, color: C.text, marginBottom: 6 }}>Describe your goals</div>
+        <div style={{ fontSize: 13, color: C.dim, marginBottom: 10, lineHeight: 1.6 }}>
+          Tell the AI anything — your sport, injuries, schedule, what you hate, what you love. The more detail, the better the program.
+        </div>
+        <textarea
+          value={form.description}
+          onChange={e => setForm({ ...form, description: e.target.value })}
+          placeholder={"e.g. I'm training for a grappling tournament in 10 weeks. I have bad shoulders so no overhead pressing. I can train Mon/Wed/Fri/Sat. I want to keep my weight class so no bulk. I hate running."}
+          rows={5}
+          style={{ width: "100%", background: C.bg, border: "1px solid " + C.border, borderRadius: 8, padding: "10px 12px", color: C.text, fontSize: 14, fontFamily: baseFont, resize: "none" }}
+        />
+      </div>
+
+      {/* Quick options */}
       <div style={card}>
+        <div style={{ fontSize: 13, color: C.dim, marginBottom: 12 }}>Quick options (optional — the description above overrides these)</div>
         <div style={lbl}>Goal</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 14 }}>
           {["Build muscle","Lose fat","Improve strength","General fitness","Athletic performance"].map(g => (
-            <button key={g} style={tag(form.goal === g)} onClick={() => setForm({ ...form, goal: g })}>{g}</button>
+            <button key={g} style={tag(form.goal === g)} onClick={() => setForm({ ...form, goal: form.goal === g ? "" : g })}>{g}</button>
           ))}
         </div>
         <div style={lbl}>Days per week</div>
@@ -954,16 +1027,17 @@ function AIBuilderScreen({ appData, setAppData, navigate }) {
           ))}
         </div>
         <div style={lbl}>Equipment (optional)</div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 14 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 6 }}>
           {["Barbell","Dumbbells","Cables","Machines","Bodyweight only","Kettlebells","Pull-up bar"].map(e => (
             <button key={e} style={tag(form.equipment.includes(e))} onClick={() => setForm({ ...form, equipment: form.equipment.includes(e) ? form.equipment.filter(x => x !== e) : [...form.equipment, e] })}>{e}</button>
           ))}
         </div>
-        {error && <div style={errBox}>{error}</div>}
-        <button style={btn("primary")} onClick={generate} disabled={!form.goal || loading}>
-          {loading ? "Generating..." : "Generate Program"}
-        </button>
       </div>
+
+      {error && <div style={errBox}>{error}</div>}
+      <button style={btn("primary")} onClick={generate} disabled={(!form.goal && !form.description.trim()) || loading}>
+        {loading ? "Building your program..." : "Generate Program"}
+      </button>
     </div>
   );
 }
