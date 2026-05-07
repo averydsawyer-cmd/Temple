@@ -6499,7 +6499,7 @@ function TempleApp() {
     <FontFaceCtx.Provider value={fontFace}>
     <div style={{ fontFamily: activeFont, background: C.bg, minHeight: "100vh", color: C.text, width: "100%", maxWidth: 480, margin: "0 auto", paddingBottom: "calc(72px + env(safe-area-inset-bottom))" }}>
       {/* Header */}
-      <div style={{ padding: "18px 20px 10px", paddingTop: "calc(18px + env(safe-area-inset-top))", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid " + C.border, position: "sticky", top: 0, background: C.bg, zIndex: 50 }}>
+      <div style={{ padding: "12px 20px 10px", paddingTop: "calc(12px + env(safe-area-inset-top))", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid " + C.border, position: "sticky", top: 0, background: C.bg, zIndex: 50 }}>
         <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 3, color: C.accent, fontFamily: baseFont }}>TEMPLE</div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {showTimerIndicator && (
