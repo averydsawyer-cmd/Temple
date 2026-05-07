@@ -6497,9 +6497,9 @@ function TempleApp() {
   return (
     <FontScaleCtx.Provider value={appData.profile.fontScale || 1}>
     <FontFaceCtx.Provider value={fontFace}>
-    <div style={{ fontFamily: activeFont, background: C.bg, minHeight: "100vh", color: C.text, width: "100%", maxWidth: 480, margin: "0 auto", paddingBottom: 72 }}>
+    <div style={{ fontFamily: activeFont, background: C.bg, minHeight: "100vh", color: C.text, width: "100%", maxWidth: 480, margin: "0 auto", paddingBottom: "calc(72px + env(safe-area-inset-bottom))" }}>
       {/* Header */}
-      <div style={{ padding: "18px 20px 10px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid " + C.border, position: "sticky", top: 0, background: C.bg, zIndex: 50 }}>
+      <div style={{ padding: "18px 20px 10px", paddingTop: "calc(18px + env(safe-area-inset-top))", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid " + C.border, position: "sticky", top: 0, background: C.bg, zIndex: 50 }}>
         <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 3, color: C.accent, fontFamily: baseFont }}>TEMPLE</div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {showTimerIndicator && (
@@ -6532,7 +6532,7 @@ function TempleApp() {
       </div>
 
       {/* Bottom nav */}
-      <nav style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, background: "#1e1e1e", borderTop: "2px solid " + C.border, display: "flex", zIndex: 100 }}>
+      <nav style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, background: "#1e1e1e", borderTop: "2px solid " + C.border, display: "flex", zIndex: 100, paddingBottom: "env(safe-area-inset-bottom)" }}>
         {navItems.map(function(item) {
           const active = currentScreen === item.id;
           const hasWorkout = item.id === "workout" && appData.activeWorkout && appData.activeWorkout.exercises;
