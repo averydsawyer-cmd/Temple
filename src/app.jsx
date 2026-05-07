@@ -6344,10 +6344,11 @@ class ErrorBoundary extends React.Component {
   componentDidCatch(err, info) { console.error("Temple crash:", err, info); }
   render() {
     if (this.state.error) {
-      return React.createElement("div", { style: { padding: 24, color: "#f0ece4", fontFamily: "sans-serif" } },
-        React.createElement("div", { style: { color: "#e8a020", fontSize: 22, fontWeight: 700, marginBottom: 12 } }, "TEMPLE"),
-        React.createElement("div", { style: { color: "#ef4444", marginBottom: 8 } }, "App failed to start"),
-        React.createElement("pre", { style: { fontSize: 12, color: "#999", whiteSpace: "pre-wrap", wordBreak: "break-all" } }, String(this.state.error))
+      const loading = document.getElementById("loading");
+      if (loading) loading.style.display = "none";
+      return React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 99999, background: "#1a1a1a", padding: 24, color: "#f0ece4", fontFamily: "sans-serif", overflow: "auto" } },
+        React.createElement("div", { style: { color: "#e8a020", fontSize: 22, fontWeight: 700, marginBottom: 12 } }, "TEMPLE — startup error"),
+        React.createElement("pre", { style: { fontSize: 12, color: "#ff6b6b", whiteSpace: "pre-wrap", wordBreak: "break-all", lineHeight: 1.5 } }, String(this.state.error))
       );
     }
     return this.props.children;
