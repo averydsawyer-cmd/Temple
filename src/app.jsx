@@ -6337,6 +6337,23 @@ function AttendanceScreen({ appData, navigate }) {
   );
 }
 
+// ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(err) { return { error: err }; }
+  componentDidCatch(err, info) { console.error("Temple crash:", err, info); }
+  render() {
+    if (this.state.error) {
+      return React.createElement("div", { style: { padding: 24, color: "#f0ece4", fontFamily: "sans-serif" } },
+        React.createElement("div", { style: { color: "#e8a020", fontSize: 22, fontWeight: 700, marginBottom: 12 } }, "TEMPLE"),
+        React.createElement("div", { style: { color: "#ef4444", marginBottom: 8 } }, "App failed to start"),
+        React.createElement("pre", { style: { fontSize: 12, color: "#999", whiteSpace: "pre-wrap", wordBreak: "break-all" } }, String(this.state.error))
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 function TempleApp() {
   const [appData, setAppData] = useState(() => ({ ...DEFAULT, ...(load() || {}) }));
@@ -6350,6 +6367,12 @@ function TempleApp() {
     else if (screen === "workout") setPreviewDay(null); // clear on plain workout nav
     setCurrentScreen(screen);
   }
+
+  // Hide loading screen on first mount
+  useEffect(() => {
+    const el = document.getElementById("loading");
+    if (el) el.style.display = "none";
+  }, []);
 
   // Load fonts — must be before any conditional returns
   useEffect(() => {
@@ -6528,11 +6551,10 @@ function TempleApp() {
 
 
 const rootEl = document.getElementById("root");
-const loadingEl = document.getElementById("loading");
 const appRoot = ReactDOM.createRoot ? ReactDOM.createRoot(rootEl) : null;
+const appEl = React.createElement(ErrorBoundary, null, React.createElement(TempleApp));
 if (appRoot) {
-  appRoot.render(React.createElement(TempleApp));
+  appRoot.render(appEl);
 } else {
-  ReactDOM.render(React.createElement(TempleApp), rootEl);
+  ReactDOM.render(appEl, rootEl);
 }
-if (loadingEl) loadingEl.style.display = "none";
