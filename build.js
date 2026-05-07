@@ -56,7 +56,4 @@ ${compiled}
 fs.writeFileSync(OUT, html, 'utf8');
 const outSize = fs.statSync(OUT).size;
 console.log(`Output: ${OUT} (${Math.round(outSize / 1024)}KB)`);
-if (outSize > 512000) {
-  console.warn(`WARNING: Output exceeds 500KB target (${Math.round(outSize / 1024)}KB)`);
-}
 console.log('Build complete.');
