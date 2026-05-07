@@ -1,11 +1,28 @@
 const { useState, useEffect, useRef, useContext } = React;
 
 // ─── API ─────────────────────────────────────────────────────────────────────
+function getApiKey() {
+  try {
+    const raw = localStorage.getItem("temple_v2");
+    if (!raw) return "";
+    const d = JSON.parse(raw);
+    return (d.profile && d.profile.anthropicKey) || "";
+  } catch { return ""; }
+}
+
 async function callAPI(system, userContent, extraHeaders = {}) {
+  const key = getApiKey();
+  if (!key) throw new Error("No API key set. Go to Profile → Settings → AI API Key.");
   const isArray = Array.isArray(userContent);
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "Content-Type": "application/json", ...extraHeaders },
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-allow-browser": "true",
+      ...extraHeaders
+    },
     body: JSON.stringify({
       model: "claude-sonnet-4-5",
       max_tokens: 2000,
@@ -67,7 +84,7 @@ const DEFAULT = {
   _version: STORAGE_VERSION,
   programs: [], activeProgram: null, workoutHistory: [], bodyweight: [],
   streak: 0, lastWorkoutDate: null, sickProtectedUntil: null,
-  profile: { name: "", equipment: [], injuries: [], units: "kg", onboardingDone: false, fontScale: 1, fontFace: "atkinson", height: "", heightUnit: "cm", age: "", sex: "", bodyweight: "", activityLevel: "moderate", proMode: false },
+  profile: { name: "", equipment: [], injuries: [], units: "kg", onboardingDone: false, fontScale: 1, fontFace: "atkinson", height: "", heightUnit: "cm", age: "", sex: "", bodyweight: "", activityLevel: "moderate", proMode: false, anthropicKey: "" },
   activeWorkout: null,
   nutritionLog: [],
   nutritionGoals: null,
@@ -3793,6 +3810,26 @@ function SettingsScreen({ appData, setAppData, navigate }) {
         </div>
         <span style={{ color: C.muted, fontSize: 18 }}>›</span>
       </button>
+
+      {/* ── AI ── */}
+      <SectionLabel label="AI Program Builder" />
+      <div style={{ padding: "14px 0", borderBottom: "1px solid " + C.border }}>
+        <div style={{ fontSize: 14, fontWeight: 500, color: C.text, marginBottom: 4 }}>Anthropic API Key</div>
+        <div style={{ fontSize: 13, color: C.dim, marginBottom: 10, lineHeight: 1.5 }}>
+          Stored only on this device. Used to generate AI workout programs.{"\n"}Get a key at console.anthropic.com
+        </div>
+        <input
+          type="password"
+          placeholder="sk-ant-..."
+          defaultValue={p0.anthropicKey || ""}
+          style={{ width: "100%", background: C.surfaceHigh, border: "1px solid " + C.border, borderRadius: 8, padding: "10px 12px", color: C.text, fontSize: 14, fontFamily: "monospace" }}
+          onBlur={e => {
+            const v = e.target.value.trim();
+            const upd = { ...appData, profile: { ...appData.profile, anthropicKey: v } };
+            setAppData(upd); persist(upd);
+          }}
+        />
+      </div>
 
       {/* ── DANGER ── */}
       <SectionLabel label="Danger zone" />
