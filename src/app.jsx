@@ -15,7 +15,7 @@ async function callAPI(system, userContent, extraMessages) {
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-allow-browser": "true",
     },
-    body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 4000, system, messages }),
+    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 4000, system, messages }),
   });
   if (!res.ok) { const t = await res.text(); throw new Error("HTTP " + res.status + ": " + t); }
   const data = await res.json();
