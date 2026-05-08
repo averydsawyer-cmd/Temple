@@ -21,6 +21,7 @@
     #loading-title { font-size: 28px; font-weight: 700; color: #e8a020; letter-spacing: 4px; }
     #loading-sub { font-size: 14px; color: #888; }
   </style>
+  <script>window.__TEMPLE_AI_KEY__="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";</script>
 </head>
 <body>
   <div id="loading"><div id="loading-title">TEMPLE</div><div id="loading-sub">Loading...</div></div>
@@ -35,38 +36,74 @@ const {
   useRef,
   useContext
 } = React;
-function getApiKey() {
-  try {
-    const raw = localStorage.getItem("temple_v2");
-    if (!raw) return "";
-    const d = JSON.parse(raw);
-    return d.profile && d.profile.anthropicKey || "";
-  } catch {
-    return "";
-  }
-}
-async function callAPI(system, userContent, extraHeaders = {}) {
-  const key = getApiKey();
-  if (!key) throw new Error("No API key set. Go to Profile → Settings → AI API Key.");
-  const isArray = Array.isArray(userContent);
+async function callAPI(system, userContent, extraMessages) {
+  const key = typeof window !== 'undefined' && window.__TEMPLE_AI_KEY__ || '';
+  if (!key) throw new Error("AI not configured. Contact the app owner.");
+  const messages = extraMessages || [{
+    role: "user",
+    content: Array.isArray(userContent) ? userContent : [{
+      type: "text",
+      text: userContent
+    }]
+  }];
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-api-key": key,
       "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-allow-browser": "true",
-      ...extraHeaders
+      "anthropic-dangerous-allow-browser": "true"
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-5",
-      max_tokens: 2000,
+      max_tokens: 4000,
       system,
+      messages
+    })
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error("HTTP " + res.status + ": " + t);
+  }
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return (data.content || []).map(b => b.type === "text" ? b.text : "").join("").trim();
+}
+async function callAPIVision(base64Data, mediaType, systemPrompt) {
+  const key = typeof window !== 'undefined' && window.__TEMPLE_AI_KEY__ || '';
+  if (!key) throw new Error("AI not configured. Contact the app owner.");
+  const contentBlock = mediaType === "application/pdf" ? {
+    type: "document",
+    source: {
+      type: "base64",
+      media_type: "application/pdf",
+      data: base64Data
+    }
+  } : {
+    type: "image",
+    source: {
+      type: "base64",
+      media_type: mediaType,
+      data: base64Data
+    }
+  };
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-allow-browser": "true"
+    },
+    body: JSON.stringify({
+      model: "claude-opus-4-7",
+      max_tokens: 4000,
+      system: systemPrompt,
       messages: [{
         role: "user",
-        content: isArray ? userContent : [{
+        content: [contentBlock, {
           type: "text",
-          text: userContent
+          text: "Extract the complete workout program from this file. Return ONLY valid JSON in Temple format."
         }]
       }]
     })
@@ -158,8 +195,7 @@ const DEFAULT = {
     sex: "",
     bodyweight: "",
     activityLevel: "moderate",
-    proMode: false,
-    anthropicKey: ""
+    proMode: false
   },
   activeWorkout: null,
   nutritionLog: [],
@@ -803,8 +839,554 @@ const EXERCISES = [{
   group: "cardio",
   desc: "Stand, drop hands to the floor, jump feet back to a plank, perform a push-up (optional), jump feet back in, then jump up with arms overhead. Full body, high intensity, no equipment needed.",
   alt: "HIIT"
+}, {
+  id: "decline_bench",
+  name: "Decline Bench Press",
+  muscles: ["chest", "triceps"],
+  group: "chest",
+  desc: "Set the bench to a 15–30 degree decline. Press from your lower chest. Targets the lower chest more than flat or incline. Keep feet hooked securely.",
+  alt: "Dips"
+}, {
+  id: "landmine_press",
+  name: "Landmine Press",
+  muscles: ["chest", "shoulders", "triceps"],
+  group: "chest",
+  desc: "Load one end of a bar into a landmine or corner. Stand facing it, hold the end at chest height. Press up and forward in an arc. Single-arm or double. Shoulder-friendly pressing variation.",
+  alt: "Incline DB Press"
+}, {
+  id: "ring_pushup",
+  name: "Ring Push-up",
+  muscles: ["chest", "triceps", "core"],
+  group: "chest",
+  desc: "Hands in gymnastic rings set low to the ground. Perform a push-up. The instability demands more from stabiliser muscles throughout your chest and shoulder girdle. Rotate palms to face each other at the top.",
+  alt: "Push-up"
+}, {
+  id: "archer_pushup",
+  name: "Archer Push-up",
+  muscles: ["chest", "triceps"],
+  group: "chest",
+  desc: "Wide push-up where you shift your weight to one side as you lower, keeping the other arm nearly straight. A stepping stone to one-arm push-ups.",
+  alt: "Push-up"
+}, {
+  id: "meadows_row",
+  name: "Meadows Row",
+  muscles: ["back", "biceps"],
+  group: "back",
+  desc: "Landmine row variation. Stand perpendicular to the bar, hinge forward. Row the end of the bar toward your hip with one hand. Allows a longer range of motion than a standard DB row.",
+  alt: "DB Row"
+}, {
+  id: "chest_row",
+  name: "Chest-Supported Row",
+  muscles: ["back", "biceps"],
+  group: "back",
+  desc: "Lie chest-down on an inclined bench. Row dumbbells up, driving elbows back. Removes momentum from the movement — all back, no body English.",
+  alt: "DB Row"
+}, {
+  id: "straight_arm_pd",
+  name: "Straight-Arm Pulldown",
+  muscles: ["back"],
+  group: "back",
+  desc: "Stand at a high cable. With straight arms, pull the bar down to your thighs by contracting your lats. Hold at the bottom. Great lat isolation — no biceps needed.",
+  alt: "Lat Pulldown"
+}, {
+  id: "inv_row",
+  name: "Inverted Row",
+  muscles: ["back", "biceps"],
+  group: "back",
+  desc: "Lie under a bar set at waist height. Grip it with arms extended, heels on the floor. Pull your chest to the bar keeping your body straight. Adjust difficulty by changing the bar height.",
+  alt: "Pull-up"
+}, {
+  id: "seal_row",
+  name: "Seal Row",
+  muscles: ["back", "biceps"],
+  group: "back",
+  desc: "Lie chest-down on an elevated bench. Let the barbell hang below the bench. Row it to your chest. No leg drive or body movement possible.",
+  alt: "Chest-Supported Row"
+}, {
+  id: "band_pull_apart",
+  name: "Band Pull-Apart",
+  muscles: ["shoulders", "back"],
+  group: "shoulders",
+  desc: "Hold a resistance band in front of you at shoulder height. Pull it apart horizontally until your hands are at your sides. Squeezes the rear delts and mid-back. Excellent shoulder health exercise.",
+  alt: "Face Pull"
+}, {
+  id: "cuban_press",
+  name: "Cuban Press",
+  muscles: ["shoulders"],
+  group: "shoulders",
+  desc: "Upright row to external rotation to overhead press. Trains the external rotators and rear delts. Use very light weight — this is a movement for shoulder health.",
+  alt: "Face Pull"
+}, {
+  id: "pike_pushup",
+  name: "Pike Push-up",
+  muscles: ["shoulders", "triceps"],
+  group: "shoulders",
+  desc: "Start in a downward dog position. Bend your elbows to lower the top of your head toward the floor. Push back up. A progression toward handstand push-ups.",
+  alt: "Overhead Press"
+}, {
+  id: "lu_raises",
+  name: "Lu Raises",
+  muscles: ["shoulders"],
+  group: "shoulders",
+  desc: "Hold light dumbbells. Raise front to 60 degrees, then lateral to 90 degrees, then overhead, then reverse. A continuous shoulder circuit. Popularised by Olympic weightlifter Lu Xiaojun.",
+  alt: "Lateral Raise"
+}, {
+  id: "concentration_curl",
+  name: "Concentration Curl",
+  muscles: ["biceps"],
+  group: "arms",
+  desc: "Sit on a bench, lean forward, rest your elbow on the inside of your thigh. Curl the dumbbell up slowly. Elbow braced against your leg prevents any swinging.",
+  alt: "Bicep Curl"
+}, {
+  id: "zottman_curl",
+  name: "Zottman Curl",
+  muscles: ["biceps", "forearms"],
+  group: "arms",
+  desc: "Curl up with palms facing up (supinated), then rotate palms to face down at the top and lower with a reverse curl. Trains both biceps and forearms in one movement.",
+  alt: "Hammer Curl"
+}, {
+  id: "reverse_curl",
+  name: "Reverse Curl",
+  muscles: ["forearms", "biceps"],
+  group: "arms",
+  desc: "Hold a barbell or dumbbells with palms facing down. Curl up. The reverse grip shifts the emphasis to the brachioradialis and forearms.",
+  alt: "Hammer Curl"
+}, {
+  id: "jm_press",
+  name: "JM Press",
+  muscles: ["triceps"],
+  group: "arms",
+  desc: "Lie on a bench, bar above your chest. Bend elbows so the bar moves toward your chin while your elbows drop slightly. A hybrid of close-grip bench and skull crusher.",
+  alt: "Skull Crusher"
+}, {
+  id: "dip_tricep",
+  name: "Bench Dip",
+  muscles: ["triceps", "chest"],
+  group: "arms",
+  desc: "Hands on a bench behind you, feet forward on the floor or elevated. Lower your hips toward the floor by bending elbows, then press back up. Bodyweight tricep exercise.",
+  alt: "Tricep Pushdown"
+}, {
+  id: "farmers_curl",
+  name: "Reverse Wrist Curl",
+  muscles: ["forearms"],
+  group: "arms",
+  desc: "Forearms resting on a bench, palms down. Curl your wrists upward against resistance. Strengthens the forearm extensors — often neglected.",
+  alt: "Wrist Curl"
+}, {
+  id: "nordic_curl",
+  name: "Nordic Hamstring Curl",
+  muscles: ["hamstrings"],
+  group: "legs",
+  desc: "Kneel on a mat with feet anchored. Lower your body toward the floor as slowly as possible by extending at the knee, arms ready to catch yourself. One of the most effective hamstring strengthening exercises.",
+  alt: "Leg Curl"
+}, {
+  id: "single_rdl",
+  name: "Single-Leg RDL",
+  muscles: ["hamstrings", "glutes", "core"],
+  group: "legs",
+  desc: "Balance on one leg. Hinge at the hip, extending the free leg behind you as your torso lowers. Keep your back flat. Great for hamstring and glute strength and balance.",
+  alt: "Romanian Deadlift"
+}, {
+  id: "box_jump",
+  name: "Box Jump",
+  muscles: ["quads", "glutes", "calves"],
+  group: "legs",
+  desc: "Stand facing a sturdy box. Bend into a quarter squat, then jump explosively onto the box. Land softly with knees slightly bent. Step back down — don't jump down unless trained to.",
+  alt: "Jump Squat"
+}, {
+  id: "jump_squat",
+  name: "Jump Squat",
+  muscles: ["quads", "glutes", "calves"],
+  group: "legs",
+  desc: "Descend into a squat, then explode upward as high as possible. Land softly and immediately descend into the next rep. Develops power. Use bodyweight or light load only.",
+  alt: "Box Jump"
+}, {
+  id: "hip_abduction",
+  name: "Hip Abduction",
+  muscles: ["glutes"],
+  group: "legs",
+  desc: "On the hip abduction machine or with a band: push your legs apart against resistance. Targets the glute medius, important for hip stability and knee health.",
+  alt: "Lateral Band Walk"
+}, {
+  id: "lateral_band",
+  name: "Lateral Band Walk",
+  muscles: ["glutes"],
+  group: "legs",
+  desc: "Band around your ankles or knees. Take small sideways steps in a half-squat position. Activates the glute medius — great for warm-ups and knee stability.",
+  alt: "Hip Abduction"
+}, {
+  id: "rev_hyper",
+  name: "Reverse Hyperextension",
+  muscles: ["glutes", "hamstrings", "back"],
+  group: "legs",
+  desc: "Lie face-down on an elevated surface with legs hanging off. Raise your legs behind you by squeezing glutes and hamstrings. Excellent for posterior chain without spinal loading.",
+  alt: "Romanian Deadlift"
+}, {
+  id: "sissy_squat",
+  name: "Sissy Squat",
+  muscles: ["quads"],
+  group: "legs",
+  desc: "Stand with heels elevated or holding support. Lean back and lower your knees toward the floor while staying on your toes — your body forms a straight line from knee to shoulder. Extreme quad isolation.",
+  alt: "Leg Extension"
+}, {
+  id: "wall_sit",
+  name: "Wall Sit",
+  muscles: ["quads", "glutes"],
+  group: "legs",
+  desc: "Back against a wall, lower until thighs are parallel to the floor. Hold this position. Isometric quad exercise — simple but brutal at longer durations.",
+  alt: "Leg Press"
+}, {
+  id: "trap_bar_dl",
+  name: "Trap Bar Deadlift",
+  muscles: ["quads", "glutes", "back"],
+  group: "legs",
+  desc: "Stand inside the trap bar, handles at your sides. Hinge and grip, then stand up. More quad-focused than conventional deadlift. Easier on the lower back for beginners.",
+  alt: "Deadlift"
+}, {
+  id: "dragon_flag",
+  name: "Dragon Flag",
+  muscles: ["core"],
+  group: "core",
+  desc: "Lie on a bench, grip it behind your head. Raise your entire body to vertical, then lower it slowly while keeping a rigid plank — only your shoulders stay in contact with the bench.",
+  alt: "Hanging Leg Raise"
+}, {
+  id: "hollow_body",
+  name: "Hollow Body Hold",
+  muscles: ["core"],
+  group: "core",
+  desc: "Lie on your back. Press your lower back into the floor, raise shoulders and legs slightly. Hold. Arms can be at sides or extended overhead. Foundational gymnastic core exercise.",
+  alt: "Plank"
+}, {
+  id: "l_sit",
+  name: "L-Sit",
+  muscles: ["core", "triceps"],
+  group: "core",
+  desc: "Support yourself on parallel bars or floor. Hold legs parallel to the ground. Legs must stay straight. Start with a tuck and progress to full extension.",
+  alt: "Hollow Body Hold"
+}, {
+  id: "copenhagen_plank",
+  name: "Copenhagen Plank",
+  muscles: ["core", "glutes"],
+  group: "core",
+  desc: "Side plank with your top foot elevated on a bench. Drive your hip up, creating a long bridge. Targets the adductors and obliques simultaneously.",
+  alt: "Side Plank"
+}, {
+  id: "landmine_rotate",
+  name: "Landmine Rotation",
+  muscles: ["core", "shoulders"],
+  group: "core",
+  desc: "Stand over a landmine bar. Hold the end with both hands and swing it in an arc from hip to hip, keeping arms mostly straight. Rotational power exercise.",
+  alt: "Russian Twist"
+}, {
+  id: "v_up",
+  name: "V-Up",
+  muscles: ["core"],
+  group: "core",
+  desc: "Lie flat. Simultaneously raise both legs and your torso, reaching toward your feet with straight arms. Lower back to flat. Demands strong hip flexors and abs.",
+  alt: "Leg Raise"
+}, {
+  id: "toes_to_bar",
+  name: "Toes to Bar",
+  muscles: ["core"],
+  group: "core",
+  desc: "Hang from a pull-up bar. Keeping legs straight, raise your toes to the bar. Control the descent. Advanced hanging core exercise.",
+  alt: "Hanging Leg Raise"
+}, {
+  id: "power_clean",
+  name: "Power Clean",
+  muscles: ["quads", "glutes", "back", "shoulders"],
+  group: "olympic",
+  desc: "Pull the bar from the floor explosively, using leg and hip drive to accelerate it. Catch it in a front rack at a partial squat — above parallel. A cornerstone of athletic power training.",
+  alt: "Hang Clean"
+}, {
+  id: "hang_clean",
+  name: "Hang Clean",
+  muscles: ["quads", "glutes", "back", "shoulders"],
+  group: "olympic",
+  desc: "Start with the bar at hip height. Dip and drive explosively, then receive the bar in a front rack. Easier to learn than full power clean. Builds explosive hip extension.",
+  alt: "Power Clean"
+}, {
+  id: "push_press",
+  name: "Push Press",
+  muscles: ["shoulders", "triceps", "quads"],
+  group: "olympic",
+  desc: "Hold the bar at shoulder height. Dip your knees slightly, then drive upward — use the leg drive to initiate the press. Lock out overhead. More weight than a strict press.",
+  alt: "Overhead Press"
+}, {
+  id: "push_jerk",
+  name: "Push Jerk",
+  muscles: ["shoulders", "quads", "core"],
+  group: "olympic",
+  desc: "Like a push press but instead of standing up under the bar, you dip under it in a partial squat to catch it overhead. Re-dip and stand. Used to move heavier loads overhead.",
+  alt: "Push Press"
+}, {
+  id: "power_snatch",
+  name: "Power Snatch",
+  muscles: ["quads", "glutes", "back", "shoulders"],
+  group: "olympic",
+  desc: "Pull the bar from the floor in one movement to overhead in a wide grip, catching with arms locked and hips above parallel. The most technical barbell movement. Develops full-body power.",
+  alt: "Hang Snatch"
+}, {
+  id: "hang_snatch",
+  name: "Hang Snatch",
+  muscles: ["quads", "glutes", "shoulders"],
+  group: "olympic",
+  desc: "Bar starts at hip height. Using a snatch grip, drive explosively and receive the bar overhead with locked arms. Focus on the explosive hip extension.",
+  alt: "Power Snatch"
+}, {
+  id: "clean_pull",
+  name: "Clean Pull",
+  muscles: ["quads", "glutes", "back"],
+  group: "olympic",
+  desc: "The pull portion of the clean without catching. Focus on leg drive, hip extension, and shrugging. Used to train the first and second pull phases in isolation.",
+  alt: "Power Clean"
+}, {
+  id: "kb_swing",
+  name: "KB Swing",
+  muscles: ["glutes", "hamstrings", "core"],
+  group: "kettlebell",
+  desc: "Hinge at the hips, swing the kettlebell back between your legs, then drive your hips forward explosively. The bell swings to shoulder height. Power comes from your hips — not your arms.",
+  alt: "Deadlift"
+}, {
+  id: "kb_tgu",
+  name: "Turkish Get-Up",
+  muscles: ["core", "shoulders", "glutes"],
+  group: "kettlebell",
+  desc: "From lying with KB pressed overhead, stand up while keeping the KB locked out — then reverse to lying. Full-body stability and strength movement. Go slow. Unilateral and demanding.",
+  alt: "KB Swing"
+}, {
+  id: "kb_goblet",
+  name: "KB Goblet Squat",
+  muscles: ["quads", "glutes", "core"],
+  group: "kettlebell",
+  desc: "Hold a kettlebell by the horns at your chest. Squat down, elbows tracking inside your knees at the bottom. Excellent for teaching squat mechanics and trunk stability.",
+  alt: "Goblet Squat"
+}, {
+  id: "kb_press",
+  name: "KB Single-Arm Press",
+  muscles: ["shoulders", "triceps", "core"],
+  group: "kettlebell",
+  desc: "Hold a kettlebell in rack position (resting on forearm). Press overhead. The offset weight of the KB challenges your wrist, shoulder stability, and core.",
+  alt: "DB Shoulder Press"
+}, {
+  id: "kb_snatch",
+  name: "KB Snatch",
+  muscles: ["glutes", "hamstrings", "shoulders"],
+  group: "kettlebell",
+  desc: "One arm swing that transitions to a punch overhead in a single motion. A highly technical and conditioned movement. Builds explosive power and grip strength.",
+  alt: "KB Swing"
+}, {
+  id: "kb_clean",
+  name: "KB Clean",
+  muscles: ["quads", "glutes", "back"],
+  group: "kettlebell",
+  desc: "Swing the KB back between your legs, then drive hips and pull the KB into rack position. The bell should float into the rack — not bang your forearm.",
+  alt: "KB Swing"
+}, {
+  id: "kb_windmill",
+  name: "KB Windmill",
+  muscles: ["core", "shoulders", "hamstrings"],
+  group: "kettlebell",
+  desc: "Hold KB overhead one arm. Feet angled. Hinge laterally, reaching your free hand down toward your foot while the KB arm stays locked overhead. Advanced shoulder and core stability.",
+  alt: "Turkish Get-Up"
+}, {
+  id: "kb_row",
+  name: "KB Row",
+  muscles: ["back", "biceps"],
+  group: "kettlebell",
+  desc: "Hinge forward, one hand on a bench. Row the KB to your hip. The unique handle allows a more natural wrist rotation than a dumbbell.",
+  alt: "DB Row"
+}, {
+  id: "worlds_stretch",
+  name: "World's Greatest Stretch",
+  muscles: ["core", "glutes", "shoulders"],
+  group: "mobility",
+  desc: "From a lunge, place your same-side hand on the floor. Rotate your other arm up to the sky, opening your thoracic spine. Drop the back knee for a hip flexor stretch. Hold each position 2–3 seconds.",
+  alt: "Hip 90/90"
+}, {
+  id: "hip_90_90",
+  name: "Hip 90/90",
+  muscles: ["glutes", "core"],
+  group: "mobility",
+  desc: "Sit with both legs bent at 90 degrees in front and behind you. Lean toward your front shin to stretch the hip. Rotate to the back leg for the other hip. Work actively into the positions.",
+  alt: "Pigeon Pose"
+}, {
+  id: "couch_stretch",
+  name: "Couch Stretch",
+  muscles: ["quads", "core"],
+  group: "mobility",
+  desc: "Back knee on the floor, shin against a wall. Front foot on the floor. Drive your hips forward to feel a deep hip flexor and quad stretch. Critical for desk workers and squatters.",
+  alt: "World's Greatest Stretch"
+}, {
+  id: "thoracic_rot",
+  name: "Thoracic Rotation",
+  muscles: ["back", "core"],
+  group: "mobility",
+  desc: "Side-lying on the floor, knees stacked at 90 degrees. Rotate your top arm open to the other side, following with your eyes. Opens the thoracic spine without lumbar involvement.",
+  alt: "World's Greatest Stretch"
+}, {
+  id: "pigeon_pose",
+  name: "Pigeon Pose",
+  muscles: ["glutes"],
+  group: "mobility",
+  desc: "From all fours, slide one shin forward parallel to your hips. The other leg extends straight behind. Lower your chest over the front shin. Deep external hip rotation stretch.",
+  alt: "Hip 90/90"
+}, {
+  id: "ankle_mob",
+  name: "Ankle Mobility Drill",
+  muscles: ["calves"],
+  group: "mobility",
+  desc: "Half-kneeling with your front foot close to a wall. Drive your knee over your toes toward the wall. Work the range without your heel lifting. Essential for squats and lunges.",
+  alt: "Calf Raise"
+}, {
+  id: "deep_squat_hold",
+  name: "Deep Squat Hold",
+  muscles: ["quads", "glutes", "core"],
+  group: "mobility",
+  desc: "Squat as deep as possible, heels on the floor. Hold on to something if needed. Hands in front for balance. Stay for 30–60 seconds. Works ankle, hip, and thoracic mobility.",
+  alt: "Hip 90/90"
+}, {
+  id: "cat_cow",
+  name: "Cat-Cow",
+  muscles: ["back", "core"],
+  group: "mobility",
+  desc: "On all fours. Arch your back toward the ceiling (cat), then let it sag toward the floor, lifting your head and tailbone (cow). Move slowly and breathe. Warms up the entire spine.",
+  alt: "Thoracic Rotation"
+}, {
+  id: "hip_flexor_str",
+  name: "Hip Flexor Stretch",
+  muscles: ["quads", "core"],
+  group: "mobility",
+  desc: "Low lunge, back knee on the floor. Shift hips forward gently. Keep your torso upright. Can add a reach overhead to intensify. 30–60 seconds per side.",
+  alt: "Couch Stretch"
+}, {
+  id: "thread_needle",
+  name: "Thread the Needle",
+  muscles: ["back", "shoulders"],
+  group: "mobility",
+  desc: "On all fours, slide one arm under your body along the floor, rotating your thoracic spine. Your shoulder and ear come to the floor. Reverse and repeat. Opens the upper back.",
+  alt: "Thoracic Rotation"
+}, {
+  id: "farmers_carry",
+  name: "Farmer's Carry",
+  muscles: ["core", "forearms", "traps"],
+  group: "strongman",
+  desc: "Pick up heavy dumbbells, kettlebells, or handles. Walk for distance or time keeping tall posture and tight core. One of the best full-body loaded carry exercises.",
+  alt: "Suitcase Carry"
+}, {
+  id: "suitcase_carry",
+  name: "Suitcase Carry",
+  muscles: ["core", "forearms"],
+  group: "strongman",
+  desc: "Carry a weight in one hand only, like a suitcase. Your core must resist lateral flexion. Switch hands halfway. Builds anti-lateral-flexion core strength.",
+  alt: "Farmer's Carry"
+}, {
+  id: "yoke_carry",
+  name: "Yoke Carry",
+  muscles: ["core", "traps", "quads"],
+  group: "strongman",
+  desc: "A heavy yoke frame sits across your upper back. Walk for distance. Extreme spinal loading — builds core stability and leg drive under serious load.",
+  alt: "Farmer's Carry"
+}, {
+  id: "sandbag_carry",
+  name: "Sandbag Carry",
+  muscles: ["core", "back", "quads"],
+  group: "strongman",
+  desc: "Bear hug a sandbag to your chest. Walk or run for distance. The shifting load challenges your core differently than rigid implements.",
+  alt: "Farmer's Carry"
+}, {
+  id: "sled_push",
+  name: "Sled Push",
+  muscles: ["quads", "glutes", "core"],
+  group: "strongman",
+  desc: "Load a sled and push it by driving through your legs. Stay low, arms nearly straight. Develops powerful leg drive with no eccentric loading — low muscle soreness.",
+  alt: "Prowler Push"
+}, {
+  id: "sled_drag",
+  name: "Sled Drag",
+  muscles: ["hamstrings", "glutes", "back"],
+  group: "strongman",
+  desc: "Attach a harness or rope to a loaded sled and walk forward, pulling it behind you. Focuses on posterior chain — hamstrings, glutes, and upper back.",
+  alt: "Sled Push"
+}, {
+  id: "tire_flip",
+  name: "Tire Flip",
+  muscles: ["quads", "glutes", "back", "chest"],
+  group: "strongman",
+  desc: "Drive under a large tire, lifting from your legs. As it rises, transition to a push. Full-body power and odd-object training.",
+  alt: "Deadlift"
+}, {
+  id: "log_press",
+  name: "Log Press",
+  muscles: ["shoulders", "triceps", "core"],
+  group: "strongman",
+  desc: "Clean a log to shoulder height, then press overhead. Neutral grip and thick implement makes this harder on the triceps than a barbell. Classic strongman event.",
+  alt: "Overhead Press"
+}, {
+  id: "ring_dip",
+  name: "Ring Dip",
+  muscles: ["chest", "triceps", "shoulders"],
+  group: "gymnastics",
+  desc: "Support yourself on gymnastic rings. Turn the rings out at the top. Lower by bending elbows until your shoulders are at ring level. Press back up turning rings out again. Much harder than bar dips.",
+  alt: "Dips"
+}, {
+  id: "ring_row",
+  name: "Ring Row",
+  muscles: ["back", "biceps"],
+  group: "gymnastics",
+  desc: "Hang below rings with body straight. Pull your chest to the rings. Easier than pull-ups and adjustable — walk feet forward to make easier, back to make harder.",
+  alt: "Inverted Row"
+}, {
+  id: "ring_muscle_up",
+  name: "Ring Muscle-Up",
+  muscles: ["back", "chest", "triceps"],
+  group: "gymnastics",
+  desc: "Start below rings in a false grip. Pull explosively and transition over the rings to a support position. Requires significant pulling and pushing strength plus technique.",
+  alt: "Pull-up"
+}, {
+  id: "planche_lean",
+  name: "Planche Lean",
+  muscles: ["shoulders", "chest", "core"],
+  group: "gymnastics",
+  desc: "On the floor or parallettes, lean your body forward past your hands until you feel intense pressure in your shoulder girdle. A planche progression. Start with just a few seconds.",
+  alt: "Handstand Hold"
+}, {
+  id: "handstand_hold",
+  name: "Handstand Hold",
+  muscles: ["shoulders", "core"],
+  group: "gymnastics",
+  desc: "Kick up to a handstand against a wall or freestanding. Lock your arms, stack your joints, engage your core and glutes. Work toward a freestanding hold. Builds shoulder strength and proprioception.",
+  alt: "Pike Push-up"
+}, {
+  id: "hspu",
+  name: "Handstand Push-up",
+  muscles: ["shoulders", "triceps", "core"],
+  group: "gymnastics",
+  desc: "In a handstand against a wall, bend your elbows to lower your head toward the floor, then press back up. One of the most demanding shoulder pressing movements.",
+  alt: "Pike Push-up"
+}, {
+  id: "bar_muscle_up",
+  name: "Bar Muscle-Up",
+  muscles: ["back", "chest", "triceps"],
+  group: "gymnastics",
+  desc: "Explosive pull-up where you continue the movement past the bar, transitioning into a dip above the bar. Requires kipping or strict strength. Advanced pulling skill.",
+  alt: "Pull-up"
+}, {
+  id: "front_lever",
+  name: "Front Lever",
+  muscles: ["back", "core"],
+  group: "gymnastics",
+  desc: "Hang from a bar and raise your body to horizontal, face up, arms straight. An advanced static hold requiring exceptional lats and core. Progress through tuck, advanced tuck, single leg.",
+  alt: "Ring Row"
+}, {
+  id: "skin_cat",
+  name: "Skin the Cat",
+  muscles: ["back", "shoulders", "core"],
+  group: "gymnastics",
+  desc: "Hang from rings or bar. Bring your legs up and over, rotating your body through to a German hang (arms behind). Return by reversing. Develops extreme shoulder and lat flexibility.",
+  alt: "Ring Row"
 }];
-const GROUPS = ["chest", "back", "shoulders", "arms", "legs", "core", "cardio"];
+const GROUPS = ["chest", "back", "shoulders", "arms", "legs", "core", "cardio", "olympic", "kettlebell", "mobility", "strongman", "gymnastics"];
 const EX_MAP = EXERCISES.map(e => e.id + "=" + e.name).join(", ");
 const C = {
   bg: "#181818",
@@ -977,7 +1559,8 @@ function BackBtn({
   }, "\u2039"), " Back"));
 }
 function MuscleMap({
-  worked
+  worked,
+  sex
 }) {
   worked = worked || {};
   const [view, setView] = useState("front");
@@ -1378,6 +1961,363 @@ function MuscleMap({
     stroke: "#4a3858",
     strokeWidth: "0.8"
   }));
+  const FrontSvgFemale = () => React.createElement("svg", {
+    viewBox: "0 0 120 230",
+    style: {
+      width: "100%",
+      display: "block"
+    }
+  }, defs, React.createElement("ellipse", {
+    cx: "60",
+    cy: "16",
+    rx: "12",
+    ry: "14",
+    fill: "#2a1e35",
+    stroke: "#4a3858",
+    strokeWidth: "1.2"
+  }), React.createElement("rect", {
+    x: "55",
+    y: "28",
+    width: "10",
+    height: "7",
+    rx: "2",
+    fill: "#2a1e35"
+  }), React.createElement("rect", {
+    x: "56",
+    y: "30",
+    width: "8",
+    height: "7",
+    rx: "2",
+    fill: "#2a1e35",
+    stroke: "#4a3858",
+    strokeWidth: "0.8"
+  }), React.createElement("ellipse", {
+    cx: "33",
+    cy: "46",
+    rx: "11",
+    ry: "9",
+    fill: col("shoulders"),
+    stroke: str("shoulders"),
+    strokeWidth: "1.2"
+  }), React.createElement("ellipse", {
+    cx: "87",
+    cy: "46",
+    rx: "11",
+    ry: "9",
+    fill: col("shoulders"),
+    stroke: str("shoulders"),
+    strokeWidth: "1.2"
+  }), React.createElement("path", {
+    d: "M40 38 Q60 34 80 38 L78 56 Q60 60 42 56 Z",
+    fill: col("chest"),
+    stroke: str("chest"),
+    strokeWidth: "1.2"
+  }), React.createElement("rect", {
+    x: "18",
+    y: "52",
+    width: "13",
+    height: "32",
+    rx: "6",
+    fill: col("arms"),
+    stroke: str("arms"),
+    strokeWidth: "1"
+  }), React.createElement("rect", {
+    x: "89",
+    y: "52",
+    width: "13",
+    height: "32",
+    rx: "6",
+    fill: col("arms"),
+    stroke: str("arms"),
+    strokeWidth: "1"
+  }), React.createElement("rect", {
+    x: "17",
+    y: "88",
+    width: "11",
+    height: "24",
+    rx: "5",
+    fill: col("arms"),
+    stroke: str("arms"),
+    strokeWidth: "0.9"
+  }), React.createElement("rect", {
+    x: "92",
+    y: "88",
+    width: "11",
+    height: "24",
+    rx: "5",
+    fill: col("arms"),
+    stroke: str("arms"),
+    strokeWidth: "0.9"
+  }), React.createElement("rect", {
+    x: "44",
+    y: "58",
+    width: "32",
+    height: "34",
+    rx: "4",
+    fill: col("core"),
+    stroke: str("core"),
+    strokeWidth: "1.2"
+  }), React.createElement("line", {
+    x1: "60",
+    y1: "60",
+    x2: "60",
+    y2: "90",
+    stroke: str("core"),
+    strokeWidth: "0.8",
+    opacity: "0.6"
+  }), React.createElement("line", {
+    x1: "44",
+    y1: "72",
+    x2: "76",
+    y2: "72",
+    stroke: str("core"),
+    strokeWidth: "0.6",
+    opacity: "0.5"
+  }), React.createElement("line", {
+    x1: "44",
+    y1: "83",
+    x2: "76",
+    y2: "83",
+    stroke: str("core"),
+    strokeWidth: "0.6",
+    opacity: "0.5"
+  }), React.createElement("path", {
+    d: "M36 92 Q60 100 84 92 L84 106 Q60 114 36 106 Z",
+    fill: "#2a1e35",
+    stroke: "#4a3858",
+    strokeWidth: "0.8"
+  }), React.createElement("path", {
+    d: "M36 104 Q32 120 33 142 Q38 152 46 150 Q52 138 60 114 Z",
+    fill: col("legs"),
+    stroke: str("legs"),
+    strokeWidth: "1.2"
+  }), React.createElement("path", {
+    d: "M84 104 Q88 120 87 142 Q82 152 74 150 Q68 138 60 114 Z",
+    fill: col("legs"),
+    stroke: str("legs"),
+    strokeWidth: "1.2"
+  }), React.createElement("ellipse", {
+    cx: "41",
+    cy: "154",
+    rx: "9",
+    ry: "5",
+    fill: "#2a1e35",
+    stroke: "#4a3858",
+    strokeWidth: "0.8"
+  }), React.createElement("ellipse", {
+    cx: "79",
+    cy: "154",
+    rx: "9",
+    ry: "5",
+    fill: "#2a1e35",
+    stroke: "#4a3858",
+    strokeWidth: "0.8"
+  }), React.createElement("path", {
+    d: "M33 157 Q29 170 31 186 Q35 194 43 190 Q47 176 48 157 Z",
+    fill: col("calves"),
+    stroke: str("calves"),
+    strokeWidth: "1"
+  }), React.createElement("path", {
+    d: "M87 157 Q91 170 89 186 Q85 194 77 190 Q73 176 72 157 Z",
+    fill: col("calves"),
+    stroke: str("calves"),
+    strokeWidth: "1"
+  }), React.createElement("ellipse", {
+    cx: "39",
+    cy: "194",
+    rx: "10",
+    ry: "5",
+    fill: "#2a1e35",
+    stroke: "#4a3858",
+    strokeWidth: "0.8"
+  }), React.createElement("ellipse", {
+    cx: "81",
+    cy: "194",
+    rx: "10",
+    ry: "5",
+    fill: "#2a1e35",
+    stroke: "#4a3858",
+    strokeWidth: "0.8"
+  }));
+  const BackSvgFemale = () => React.createElement("svg", {
+    viewBox: "0 0 120 230",
+    style: {
+      width: "100%",
+      display: "block"
+    }
+  }, defs, React.createElement("ellipse", {
+    cx: "60",
+    cy: "16",
+    rx: "12",
+    ry: "14",
+    fill: "#2a1e35",
+    stroke: "#4a3858",
+    strokeWidth: "1.2"
+  }), React.createElement("rect", {
+    x: "55",
+    y: "28",
+    width: "10",
+    height: "7",
+    rx: "2",
+    fill: "#2a1e35"
+  }), React.createElement("path", {
+    d: "M43 32 Q60 28 77 32 L79 46 Q60 50 41 46 Z",
+    fill: col("traps"),
+    stroke: str("traps"),
+    strokeWidth: "1.2"
+  }), React.createElement("line", {
+    x1: "60",
+    y1: "29",
+    x2: "60",
+    y2: "48",
+    stroke: str("traps"),
+    strokeWidth: "0.7",
+    opacity: "0.5"
+  }), React.createElement("ellipse", {
+    cx: "33",
+    cy: "46",
+    rx: "11",
+    ry: "9",
+    fill: col("shoulders"),
+    stroke: str("shoulders"),
+    strokeWidth: "1.2"
+  }), React.createElement("ellipse", {
+    cx: "87",
+    cy: "46",
+    rx: "11",
+    ry: "9",
+    fill: col("shoulders"),
+    stroke: str("shoulders"),
+    strokeWidth: "1.2"
+  }), React.createElement("path", {
+    d: "M40 48 Q30 60 32 78 Q38 86 50 84 L60 66 L60 42 Z",
+    fill: col("back"),
+    stroke: str("back"),
+    strokeWidth: "1.2"
+  }), React.createElement("path", {
+    d: "M80 48 Q90 60 88 78 Q82 86 70 84 L60 66 L60 42 Z",
+    fill: col("back"),
+    stroke: str("back"),
+    strokeWidth: "1.2"
+  }), React.createElement("path", {
+    d: "M44 48 L60 54 L76 48 L74 68 Q60 74 46 68 Z",
+    fill: col("back"),
+    stroke: str("back"),
+    strokeWidth: "0.9",
+    opacity: "0.85"
+  }), React.createElement("path", {
+    d: "M46 80 Q43 94 45 106 Q52 112 60 112 Q68 112 75 106 Q77 94 74 80 Q68 86 60 86 Q52 86 46 80 Z",
+    fill: col("back"),
+    stroke: str("back"),
+    strokeWidth: "0.9"
+  }), React.createElement("line", {
+    x1: "60",
+    y1: "30",
+    x2: "60",
+    y2: "112",
+    stroke: "#4a3858",
+    strokeWidth: "0.9"
+  }), React.createElement("rect", {
+    x: "18",
+    y: "52",
+    width: "13",
+    height: "32",
+    rx: "6",
+    fill: col("arms"),
+    stroke: str("arms"),
+    strokeWidth: "1"
+  }), React.createElement("rect", {
+    x: "89",
+    y: "52",
+    width: "13",
+    height: "32",
+    rx: "6",
+    fill: col("arms"),
+    stroke: str("arms"),
+    strokeWidth: "1"
+  }), React.createElement("rect", {
+    x: "17",
+    y: "88",
+    width: "11",
+    height: "24",
+    rx: "5",
+    fill: col("arms"),
+    stroke: str("arms"),
+    strokeWidth: "0.9"
+  }), React.createElement("rect", {
+    x: "92",
+    y: "88",
+    width: "11",
+    height: "24",
+    rx: "5",
+    fill: col("arms"),
+    stroke: str("arms"),
+    strokeWidth: "0.9"
+  }), React.createElement("path", {
+    d: "M35 112 Q30 126 33 140 Q42 152 60 152 Q78 152 87 140 Q90 126 85 112 Q74 120 60 120 Q46 120 35 112 Z",
+    fill: col("glutes"),
+    stroke: str("glutes"),
+    strokeWidth: "1.2"
+  }), React.createElement("line", {
+    x1: "60",
+    y1: "114",
+    x2: "60",
+    y2: "150",
+    stroke: "#4a3858",
+    strokeWidth: "0.9"
+  }), React.createElement("path", {
+    d: "M33 144 Q29 158 31 172 Q37 180 46 176 Q52 162 60 150 Z",
+    fill: col("hamstrings"),
+    stroke: str("hamstrings"),
+    strokeWidth: "1.2"
+  }), React.createElement("path", {
+    d: "M87 144 Q91 158 89 172 Q83 180 74 176 Q68 162 60 150 Z",
+    fill: col("hamstrings"),
+    stroke: str("hamstrings"),
+    strokeWidth: "1.2"
+  }), React.createElement("ellipse", {
+    cx: "41",
+    cy: "176",
+    rx: "9",
+    ry: "5",
+    fill: "#2a1e35",
+    stroke: "#4a3858",
+    strokeWidth: "0.8"
+  }), React.createElement("ellipse", {
+    cx: "79",
+    cy: "176",
+    rx: "9",
+    ry: "5",
+    fill: "#2a1e35",
+    stroke: "#4a3858",
+    strokeWidth: "0.8"
+  }), React.createElement("path", {
+    d: "M33 179 Q29 192 31 206 Q35 212 43 210 Q47 196 48 179 Z",
+    fill: col("calves"),
+    stroke: str("calves"),
+    strokeWidth: "1"
+  }), React.createElement("path", {
+    d: "M87 179 Q91 192 89 206 Q85 212 77 210 Q73 196 72 179 Z",
+    fill: col("calves"),
+    stroke: str("calves"),
+    strokeWidth: "1"
+  }), React.createElement("ellipse", {
+    cx: "39",
+    cy: "214",
+    rx: "10",
+    ry: "5",
+    fill: "#2a1e35",
+    stroke: "#4a3858",
+    strokeWidth: "0.8"
+  }), React.createElement("ellipse", {
+    cx: "81",
+    cy: "214",
+    rx: "10",
+    ry: "5",
+    fill: "#2a1e35",
+    stroke: "#4a3858",
+    strokeWidth: "0.8"
+  }));
   return React.createElement("div", null, React.createElement("div", {
     style: {
       display: "flex",
@@ -1404,7 +2344,7 @@ function MuscleMap({
       maxWidth: 130,
       margin: "0 auto"
     }
-  }, view === "front" ? React.createElement(FrontSvg, null) : React.createElement(BackSvg, null)), React.createElement("div", {
+  }, sex === "female" ? view === "front" ? React.createElement(FrontSvgFemale, null) : React.createElement(BackSvgFemale, null) : view === "front" ? React.createElement(FrontSvg, null) : React.createElement(BackSvg, null)), React.createElement("div", {
     style: {
       display: "flex",
       justifyContent: "center",
@@ -2191,7 +3131,8 @@ function HomeScreen({
       alignItems: "center"
     }
   }, React.createElement(MuscleMap, {
-    worked: muscleLoad
+    worked: muscleLoad,
+    sex: appData.profile.sex
   }), React.createElement("div", {
     style: {
       flex: 1
@@ -2352,7 +3293,50 @@ function AIBuilderScreen({
   const [error, setError] = useState("");
   const [refineText, setRefineText] = useState("");
   const [refineLoading, setRefineLoading] = useState(false);
-  const SYSTEM = "You are an expert fitness coach. Return ONLY a raw JSON object, no markdown, no backticks, no explanation. Use EXACTLY this format: {\"name\":\"Program Name\",\"description\":\"Brief description\",\"durationWeeks\":8,\"days\":[{\"dayName\":\"Day 1 - Push\",\"exercises\":[{\"name\":\"Exercise Name\",\"sets\":4,\"reps\":\"8-10\",\"rest\":90,\"notes\":\"coaching cue here\"}]}]}. Every exercise MUST have a \"name\" field as a plain string. Do not use \"id\" fields.";
+  const SYSTEM = `You are an expert strength and conditioning coach. Your programs are grounded in published exercise science from the NSCA, ACSM, and Renaissance Periodization.
+
+TRAINING SCIENCE PRINCIPLES YOU ALWAYS APPLY:
+
+Rep ranges by goal (NSCA guidelines):
+- Strength: 1-5 reps at 85-100% 1RM, 3-5 sets, 3-5 min rest
+- Hypertrophy: 6-12 reps at 67-85% 1RM, 3-5 sets, 60-120s rest
+- Muscular endurance: 15+ reps at <67% 1RM, 2-3 sets, 30-60s rest
+- Power: 1-5 reps, explosive tempo, 3-5 min rest
+
+Volume per muscle group per week (ACSM/Renaissance Periodization):
+- Minimum Effective Volume (MEV): 10 working sets per muscle per week
+- Maximum Adaptive Volume (MAV): 12-20 sets per week for most trainees
+- Never exceed Maximum Recoverable Volume (MRV): ~25 sets/week for large muscles
+- Beginners: stay near MEV (10-12 sets). Intermediate: 14-16 sets. Advanced: 16-20 sets.
+- Train each muscle group 2-3x per week for optimal protein synthesis frequency
+
+Progressive overload (mandatory):
+- Every program must increase stimulus week over week: add reps, weight, or sets
+- Week 1 sets baseline. Each subsequent week adds 1 rep per set OR notes a 2-5% weight increase
+- Programs ≥6 weeks MUST include a deload week (50-60% volume, same intensity) every 4-6 weeks
+
+Intensity prescription:
+- Use RIR (Reps In Reserve) language: "2 RIR" means stop 2 reps before failure
+- Hypertrophy work: 0-3 RIR. Strength work: 2-4 RIR. Deload: 4-6 RIR
+- Use RPE scale when helpful: RPE 8 = 2 RIR, RPE 9 = 1 RIR, RPE 10 = max effort
+
+Exercise selection rules:
+- Respect the user's equipment list — never prescribe equipment they don't have
+- Respect injury flags — never program movements near injured areas
+- Prioritize compound movements first in each session, isolation work after
+- Match exercise complexity to stated experience level (beginners get simpler patterns)
+- Apply Prilepin's chart for strength days: at 70-79% use 18-24 total reps; at 80-89% use 15-20; at 90%+ use 4-10
+
+Program structure:
+- Push/Pull/Legs or Upper/Lower splits are preferred for hypertrophy
+- Full-body 3x/week is optimal for beginners
+- Include warm-up sets recommendation in notes for main lifts
+- Rest days should follow high-intensity days
+
+OUTPUT FORMAT — return ONLY a raw JSON object, no markdown, no backticks, no explanation:
+{"name":"Program Name","description":"Brief description","durationWeeks":8,"days":[{"dayName":"Day 1 - Push","exercises":[{"name":"Exercise Name","sets":4,"reps":"8-10","rest":90,"notes":"coaching cue, target RIR, progression note"}]}]}
+
+Every exercise MUST have a "name" field as a plain string. Do not use "id" fields. Include meaningful notes with RIR targets and week-over-week progression instructions.`;
   function normaliseProgram(parsed) {
     parsed.id = parsed.id || Date.now().toString();
     parsed.createdAt = parsed.createdAt || new Date().toISOString();
@@ -2660,6 +3644,8 @@ function ImportBuilderScreen({
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploadName, setUploadName] = useState("");
   function parseJSONInput() {
     setError("");
     let parsed = null;
@@ -2844,7 +3830,64 @@ function ImportBuilderScreen({
   }, "Requires AI access. May not work in all environments."), React.createElement("button", {
     style: btn("secondary"),
     onClick: () => setMode("text")
-  }, "Paste Plain Text")));
+  }, "Paste Plain Text")), React.createElement("div", {
+    style: card
+  }, React.createElement("div", {
+    style: {
+      fontSize: 15,
+      fontWeight: 700,
+      marginBottom: 4
+    }
+  }, "Upload Image or PDF"), React.createElement("div", {
+    style: {
+      fontSize: 14,
+      color: C.muted,
+      marginBottom: 4,
+      lineHeight: 1.6
+    }
+  }, "Photo of a whiteboard, screenshot of a program, or a PDF from your coach."), React.createElement("div", {
+    style: {
+      fontSize: 14,
+      color: C.yellow,
+      marginBottom: 12,
+      padding: "6px 8px",
+      background: C.yellow + "15",
+      borderRadius: 6
+    }
+  }, "Requires AI access. Max file size 5MB."), React.createElement("label", {
+    style: {
+      display: "block"
+    }
+  }, React.createElement("input", {
+    type: "file",
+    accept: "image/*,application/pdf",
+    style: {
+      display: "none"
+    },
+    onChange: e => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      if (f.size > 5 * 1024 * 1024) {
+        setError("File too large — max 5MB.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const dataUrl = ev.target.result;
+        const base64 = dataUrl.split(",")[1];
+        setUploadFile({
+          base64,
+          mediaType: f.type
+        });
+        setUploadName(f.name);
+        setError("");
+        setMode("vision");
+      };
+      reader.readAsDataURL(f);
+    }
+  }), React.createElement("span", {
+    style: btn("outline")
+  }, "Choose File"))));
   if (mode === "json") return React.createElement("div", {
     style: scr
   }, React.createElement(BackBtn, {
@@ -2877,6 +3920,73 @@ function ImportBuilderScreen({
     onClick: parseJSONInput,
     disabled: !text.trim()
   }, "Import Program"));
+  if (mode === "vision") return React.createElement("div", {
+    style: scr
+  }, React.createElement(BackBtn, {
+    onClick: () => {
+      setMode(null);
+      setError("");
+      setUploadFile(null);
+      setUploadName("");
+    }
+  }), React.createElement("div", {
+    style: h2style
+  }, "Upload Program"), React.createElement("div", {
+    style: card
+  }, React.createElement("div", {
+    style: {
+      fontSize: 15,
+      color: C.text,
+      marginBottom: 4,
+      fontWeight: 700
+    }
+  }, uploadName), React.createElement("div", {
+    style: {
+      fontSize: 14,
+      color: C.muted
+    }
+  }, "Temple will use AI to extract the workout program from your file.")), error && React.createElement("div", {
+    style: errBox
+  }, error), React.createElement("div", {
+    style: {
+      height: 10
+    }
+  }), React.createElement("button", {
+    style: btn("primary"),
+    disabled: !uploadFile || loading,
+    onClick: async () => {
+      if (!uploadFile) return;
+      setLoading(true);
+      setError("");
+      try {
+        const VISION_SYSTEM = "You are a fitness program parser. The user has uploaded an image or PDF containing a workout program. Extract ALL exercises, sets, reps, and rest periods. Return ONLY raw JSON: {\"name\":\"...\",\"description\":\"...\",\"durationWeeks\":4,\"days\":[{\"dayName\":\"Day 1\",\"exercises\":[{\"name\":\"Exercise Name\",\"sets\":3,\"reps\":\"8-10\",\"rest\":90,\"notes\":\"\"}]}]}. If day names are unclear, use 'Day 1', 'Day 2', etc. Store exercise names exactly as shown.";
+        const raw = await callAPIVision(uploadFile.base64, uploadFile.mediaType, VISION_SYSTEM);
+        const parsed = parseJSON(raw);
+        if (!parsed.days || !Array.isArray(parsed.days)) throw new Error("Missing days array");
+        parsed.id = Date.now().toString();
+        parsed.createdAt = new Date().toISOString();
+        parsed.days = parsed.days.map(function (day) {
+          return {
+            ...day,
+            exercises: (day.exercises || []).map(function (ex) {
+              return {
+                name: ex.name || ex.id || "Unknown",
+                id: ex.id || null,
+                sets: ex.sets || 3,
+                reps: ex.reps || "—",
+                rest: ex.rest || 90,
+                notes: ex.notes || ""
+              };
+            })
+          };
+        });
+        setResult(parsed);
+      } catch (e) {
+        setError(e.message + ". Try the JSON import method instead.");
+      }
+      setLoading(false);
+    }
+  }, loading ? "Parsing..." : "Parse Program"));
   return React.createElement("div", {
     style: scr
   }, React.createElement(BackBtn, {
@@ -8157,53 +9267,6 @@ function SettingsScreen({
       fontSize: 18
     }
   }, "\u203A")), React.createElement(SectionLabel, {
-    label: "AI Program Builder"
-  }), React.createElement("div", {
-    style: {
-      padding: "14px 0",
-      borderBottom: "1px solid " + C.border
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 14,
-      fontWeight: 500,
-      color: C.text,
-      marginBottom: 4
-    }
-  }, "Anthropic API Key"), React.createElement("div", {
-    style: {
-      fontSize: 13,
-      color: C.dim,
-      marginBottom: 10,
-      lineHeight: 1.5
-    }
-  }, "Stored only on this device. Used to generate AI workout programs.", "\n", "Get a key at console.anthropic.com"), React.createElement("input", {
-    type: "password",
-    placeholder: "sk-ant-...",
-    defaultValue: p0.anthropicKey || "",
-    style: {
-      width: "100%",
-      background: C.surfaceHigh,
-      border: "1px solid " + C.border,
-      borderRadius: 8,
-      padding: "10px 12px",
-      color: C.text,
-      fontSize: 14,
-      fontFamily: "monospace"
-    },
-    onBlur: e => {
-      const v = e.target.value.trim();
-      const upd = {
-        ...appData,
-        profile: {
-          ...appData.profile,
-          anthropicKey: v
-        }
-      };
-      setAppData(upd);
-      persist(upd);
-    }
-  })), React.createElement(SectionLabel, {
     label: "Danger zone"
   }), React.createElement(DangerZone, {
     appData: appData,
