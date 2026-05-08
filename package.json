@@ -1,0 +1,12 @@
+{
+  "name": "temple",
+  "version": "1.0.0",
+  "description": "Temple fitness tracking PWA",
+  "scripts": {
+    "build": "node build.js"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.23.2",
+    "@babel/preset-react": "^7.23.3"
+  }
+}
