@@ -21,7 +21,7 @@
     #loading-title { font-size: 28px; font-weight: 700; color: #e8a020; letter-spacing: 4px; }
     #loading-sub { font-size: 14px; color: #888; }
   </style>
-  <script>window.__TEMPLE_AI_KEY__="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";</script>
+  <script>window.__TEMPLE_AI_KEY__="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";window.__TEMPLE_BUILD__="2026-05-08T00:39:18.209Z";</script>
 </head>
 <body>
   <div id="loading"><div id="loading-title">TEMPLE</div><div id="loading-sub">Loading...</div></div>
@@ -3372,7 +3372,7 @@ Every exercise MUST have a "name" field as a plain string. Do not use "id" field
       if (!parsed.days) throw new Error("Missing days in response");
       setResult(normaliseProgram(parsed));
     } catch (e) {
-      setError(e.message || JSON.stringify(e));
+      setError((e.message || JSON.stringify(e)) + (e.name && e.name !== "Error" ? " [" + e.name + "]" : ""));
     }
     setLoading(false);
   }
@@ -10423,7 +10423,19 @@ function ProfileScreen({
       marginTop: 4
     },
     onClick: () => setInjuryShowAll(!injuryShowAll)
-  }, injuryShowAll ? "Show less" : "Show all " + injuries.length + " entries"))));
+  }, injuryShowAll ? "Show less" : "Show all " + injuries.length + " entries"))), React.createElement("div", {
+    style: {
+      marginTop: 24,
+      padding: "12px 0",
+      borderTop: "1px solid " + C.border
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: C.dim,
+      textAlign: "center"
+    }
+  }, "Build: ", typeof window !== "undefined" && window.__TEMPLE_BUILD__ ? new Date(window.__TEMPLE_BUILD__).toLocaleString() : "unknown")));
 }
 const MEASURE_FIELDS = [{
   id: "neck",

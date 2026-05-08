@@ -1162,7 +1162,7 @@ Every exercise MUST have a "name" field as a plain string. Do not use "id" field
       const parsed = parseJSON(raw);
       if (!parsed.days) throw new Error("Missing days in response");
       setResult(normaliseProgram(parsed));
-    } catch (e) { setError(e.message || JSON.stringify(e)); }
+    } catch (e) { setError((e.message || JSON.stringify(e)) + (e.name && e.name !== "Error" ? " [" + e.name + "]" : "")); }
     setLoading(false);
   }
 
@@ -4674,6 +4674,12 @@ function ProfileScreen({ appData, setAppData, navigate }) {
           </>
         )}
       </Collapsible>
+
+      <div style={{ marginTop: 24, padding: "12px 0", borderTop: "1px solid " + C.border }}>
+        <div style={{ fontSize: 13, color: C.dim, textAlign: "center" }}>
+          Build: {(typeof window !== "undefined" && window.__TEMPLE_BUILD__) ? new Date(window.__TEMPLE_BUILD__).toLocaleString() : "unknown"}
+        </div>
+      </div>
 
     </div>
   );
