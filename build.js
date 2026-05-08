@@ -2,11 +2,22 @@ const babel = require('@babel/core');
 const fs = require('fs');
 const path = require('path');
 
+// Load .env if present
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  fs.readFileSync(envPath, 'utf8').split('\n').forEach(line => {
+    const [k, ...v] = line.split('=');
+    if (k && v.length) process.env[k.trim()] = v.join('=').trim();
+  });
+}
+
+const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY || '';
+if (!ANTHROPIC_KEY) console.warn('WARNING: No ANTHROPIC_KEY in .env — AI features will not work.');
+
 const SRC = path.join(__dirname, 'src', 'app.jsx');
 const OUT = path.join(__dirname, 'index.html');
 
 const jsxSource = fs.readFileSync(SRC, 'utf8');
-
 console.log(`Compiling ${SRC} (${Math.round(jsxSource.length / 1024)}KB)...`);
 
 const result = babel.transformSync(jsxSource, {
@@ -41,6 +52,7 @@ const html = `<!DOCTYPE html>
     #loading-title { font-size: 28px; font-weight: 700; color: #e8a020; letter-spacing: 4px; }
     #loading-sub { font-size: 14px; color: #888; }
   </style>
+  <script>window.__TEMPLE_AI_KEY__=${JSON.stringify(ANTHROPIC_KEY)};</script>
 </head>
 <body>
   <div id="loading"><div id="loading-title">TEMPLE</div><div id="loading-sub">Loading...</div></div>
