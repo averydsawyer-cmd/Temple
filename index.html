@@ -21,7 +21,7 @@
     #loading-title { font-size: 28px; font-weight: 700; color: #e8a020; letter-spacing: 4px; }
     #loading-sub { font-size: 14px; color: #888; }
   </style>
-  <script>window.__TEMPLE_AI_KEY__="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";window.__TEMPLE_BUILD__="2026-05-08T00:39:18.209Z";</script>
+  <script>window.__TEMPLE_AI_KEY__="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";window.__TEMPLE_BUILD__="2026-05-08T00:56:02.644Z";</script>
 </head>
 <body>
   <div id="loading"><div id="loading-title">TEMPLE</div><div id="loading-sub">Loading...</div></div>
@@ -51,8 +51,7 @@ async function callAPI(system, userContent, extraMessages) {
     headers: {
       "Content-Type": "application/json",
       "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-allow-browser": "true"
+      "anthropic-version": "2023-06-01"
     },
     body: JSON.stringify({
       model: "claude-sonnet-4-6",

@@ -13,7 +13,6 @@ async function callAPI(system, userContent, extraMessages) {
       "Content-Type": "application/json",
       "x-api-key": key,
       "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-allow-browser": "true",
     },
     body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 4000, system, messages }),
   });
